@@ -1,0 +1,7 @@
+{
+  "name": "Heart-Voice Stories",
+  "description": "An AI-powered interactive story generator for children that provides psychological insights to parents based on story choices.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
