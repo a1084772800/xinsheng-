@@ -14,6 +14,8 @@ export const useSpeechRecognition = ({
 }: UseSpeechRecognitionProps = {}) => {
     const [isListening, setIsListening] = useState(false);
     const [transcript, setTranscript] = useState('');
+    const [isSupported, setIsSupported] = useState(false);
+    
     const recognitionRef = useRef<any>(null);
     const silenceTimerRef = useRef<any>(null);
     const noSpeechTimerRef = useRef<any>(null);
@@ -21,7 +23,9 @@ export const useSpeechRecognition = ({
 
     useEffect(() => {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        
         if (SpeechRecognition) {
+            setIsSupported(true);
             const recognition = new SpeechRecognition();
             recognition.lang = 'zh-CN';
             recognition.interimResults = true;
@@ -86,16 +90,13 @@ export const useSpeechRecognition = ({
 
             recognition.onerror = (event: any) => {
                 console.error("Speech Recognition Error", event.error);
-                // On not-allowed or no-speech, we should let the UI know it stopped
-                if (event.error === 'no-speech') {
-                    // This is handled by onend usually, but good to be explicit
-                }
                 setIsListening(false);
             };
 
             recognitionRef.current = recognition;
         } else {
             console.warn("Browser does not support Web Speech API");
+            setIsSupported(false);
         }
         
         return () => {
@@ -105,6 +106,10 @@ export const useSpeechRecognition = ({
     }, [silenceDuration, onResult, onEnd, transcript]); 
 
     const startListening = useCallback(() => {
+        if (!isSupported) {
+            console.warn("Speech Recognition not supported in this browser.");
+            return;
+        }
         if (recognitionRef.current && !isListening) {
             try {
                 finalTranscriptRef.current = '';
@@ -114,7 +119,7 @@ export const useSpeechRecognition = ({
                 console.warn("Error starting recognition", e);
             }
         }
-    }, [isListening]);
+    }, [isListening, isSupported]);
 
     const stopListening = useCallback(() => {
         if (recognitionRef.current) {
@@ -137,6 +142,7 @@ export const useSpeechRecognition = ({
 
     return { 
         isListening, 
+        isSupported,
         transcript, 
         startListening, 
         stopListening, 

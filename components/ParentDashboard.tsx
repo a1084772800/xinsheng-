@@ -1,41 +1,29 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { generateStoryScript, cacheStoryAssets, initializeAudio, getSystemVoices, AVAILABLE_TTS_MODELS, AVAILABLE_VOICES } from '../services/geminiService';
+
+import React, { useState, useEffect } from 'react';
+import { generateStoryScript, cacheStoryAssets, initializeAudio, AVAILABLE_TTS_MODELS, AVAILABLE_GEN_MODELS } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-import { Story, StoryNode, UserStats, ReportData } from '../types';
+import { Story } from '../types';
 import { StoryGraph } from './StoryGraph';
 import { useGlobalError } from './GlobalErrorSystem';
-import { ChatDataDashboard } from './ChatDataDashboard';
 
 interface ParentDashboardProps {
     stories: Story[];
-    userStats: UserStats;
-    statDeltas: Partial<UserStats>;
-    lastReport: ReportData | null; // Pass report data to show reasons
     onStoryGenerated: (story: Story) => void;
     onPlayStory: (storyId: string) => void;
     onStoryUpdate: (story: Story) => void;
-    onStoryDelete: (storyId: string) => void; // Sync with parent
+    onStoryDelete: (storyId: string) => void; 
 }
 
 const STYLES = [
-    { id: 'Adventure', icon: 'explore', label: '奇幻冒险' },
-    { id: 'Bedtime', icon: 'bedtime', label: '睡前疗愈' },
-    { id: 'Funny', icon: 'sentiment_very_satisfied', label: '幽默搞笑' },
-    { id: 'Educational', icon: 'school', label: '科普教育' },
+    { id: 'Watercolor', icon: 'palette', label: '梦幻水彩' },
+    { id: 'Ghibli', icon: 'landscape', label: '吉卜力风' },
+    { id: 'Clay', icon: 'toys', label: '粘土动画' },
+    { id: 'PaperCut', icon: 'content_cut', label: '剪纸艺术' },
+    { id: 'Crayon', icon: 'edit', label: '儿童蜡笔' },
 ];
-
-interface VoiceOption {
-    id: string;
-    label: string;
-    desc: string;
-    type: 'cloud' | 'local';
-}
 
 export const ParentDashboard: React.FC<ParentDashboardProps> = ({ 
     stories: initialStories, 
-    userStats, 
-    statDeltas,
-    lastReport,
     onStoryGenerated, 
     onPlayStory, 
     onStoryUpdate,
@@ -47,15 +35,14 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     // Inputs
     const [prompt, setPrompt] = useState('');
     const [protagonist, setProtagonist] = useState('');
-    const [selectedVoice, setSelectedVoice] = useState('Kore');
-    const [customStyle, setCustomStyle] = useState('奇幻冒险');
     
-    // Voice List State
-    const [systemVoices, setSystemVoices] = useState<VoiceOption[]>([]);
+    // Style State
+    const [customStyle, setCustomStyle] = useState('梦幻水彩');
     
-    // Advanced Settings
-    const [selectedModel, setSelectedModel] = useState(AVAILABLE_TTS_MODELS[0].id);
-    
+    // Model Selection State
+    const [selectedModel, setSelectedModel] = useState(AVAILABLE_TTS_MODELS[0].id); // TTS Model
+    const [selectedGenModel, setSelectedGenModel] = useState(AVAILABLE_GEN_MODELS[0].id); // Story Gen Model
+
     // State
     const [localStories, setLocalStories] = useState<Story[]>(initialStories); // Init directly from props
     const [isLoading, setIsLoading] = useState(false);
@@ -64,6 +51,9 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     const [previewStoryId, setPreviewStoryId] = useState<string | null>(initialStories.length > 0 ? initialStories[0].id : null);
     const [viewMode, setViewMode] = useState<'preview' | 'graph'>('graph');
     
+    // UI State for Story Selector Dropdown
+    const [isSelectorOpen, setIsSelectorOpen] = useState(false);
+    
     // Download State
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [downloadProgress, setDownloadProgress] = useState(0);
@@ -71,30 +61,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     // Delete Confirmation State - NEW
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-    // Derived state for Cloud vs Local
-    const isLocalModel = selectedModel === 'browser-tts';
-
-    // Load System Voices on Mount
-    useEffect(() => {
-        getSystemVoices().then(voices => {
-            setSystemVoices(voices);
-        });
-    }, []);
-
-    // Effect: Switch default voice when switching between Cloud and Local models
-    useEffect(() => {
-        if (isLocalModel) {
-            const isCurrentVoiceCloud = AVAILABLE_VOICES.some(v => v.id === selectedVoice);
-            if (isCurrentVoiceCloud && systemVoices.length > 0) {
-                setSelectedVoice(systemVoices[0].id);
-            }
-        } else {
-             const isCurrentVoiceLocal = systemVoices.some(v => v.id === selectedVoice);
-             if (isCurrentVoiceLocal) {
-                 setSelectedVoice(AVAILABLE_VOICES[0].id);
-             }
-        }
-    }, [isLocalModel, systemVoices, selectedVoice]);
+    // Filter stories for the library view (Only show ready stories)
+    const libraryStories = localStories.filter(s => s.isOfflineReady);
 
     // Full Sync with Parent State (Source of Truth)
     useEffect(() => {
@@ -121,7 +89,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             // Update local state temporarily (Parent state will update via onStoryUpdate later if needed, but App.tsx handles optimistic updates)
             onStoryUpdate(updatedStory);
             if (!silent && !story.isOfflineReady) {
-                 showToast("资源缓存完成", "success");
+                 showToast("绘本资源已缓存", "success");
             }
         } catch (e: any) {
             console.error("Download failed", e);
@@ -191,12 +159,16 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         setIsLoading(true);
         try {
+            // Always use 'auto' to let AI decide the persona
+            const voiceToUse = 'auto';
+
             const story = await generateStoryScript(
                 prompt, 
                 customStyle, 
-                selectedVoice, 
+                voiceToUse, 
                 protagonist,
-                selectedModel
+                selectedModel, // TTS Model
+                selectedGenModel // Gen Model
             );
             onStoryGenerated(story);
             // Local update for immediate feedback, though prop update will follow
@@ -204,8 +176,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             setPreviewStoryId(story.id); 
             setViewMode('graph'); 
 
-            // Feature 3: Auto-Cache immediately after generation
-            handleDownload(story, true);
+            // Auto-cache removed to save tokens. User must click "Generate Assets".
+            showToast("故事骨架已生成，请在右侧预览并生成配图", "success");
         } catch (e: any) {
             console.error(e);
             let msg = "生成故事失败，请重试。";
@@ -218,7 +190,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                  title = "配额不足";
                  msg = "API 配额不足，请稍后再试。";
             } else if (e.message && (e.message.includes("fetch") || e.message.includes("Network"))) {
-                 msg = "连接云端 AI 失败。虽然使用本地语音，但剧本创作仍需联网。";
+                 msg = "网络连接失败，请检查设置。如果在国内使用，请在设置中配置API代理。";
             }
             
             showToast(`${title}: ${msg}`, 'error');
@@ -255,14 +227,14 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                     <div className="lg:col-span-4 space-y-4">
                         <div className="inline-flex items-center gap-2 px-3 py-1 bg-brand-50 text-brand-600 rounded-full text-xs font-bold uppercase tracking-wider">
                             <span className="material-symbols-outlined text-sm">auto_awesome</span>
-                            AI 故事工坊
+                            AI 绘本造梦师
                         </div>
                         <h2 className="text-3xl font-bold text-slate-800 leading-tight">
-                            释放想象力<br/>
-                            <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-accent-600">定制专属声音旅程</span>
+                            把想象画成<br/>
+                            <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-accent-600">唯美的互动绘本</span>
                         </h2>
                         <p className="text-slate-500 text-sm leading-relaxed">
-                            在这里，没有固定的选项。描述您脑海中的奇思妙想，选择最喜欢的声音，AI 将为您和孩子编织一个独一无二的互动世界。
+                            输入一个想法，AI 将为您绘制精美的竖屏插画，并编织一个引导孩子深度思考的故事。
                         </p>
                     </div>
 
@@ -282,7 +254,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">故事风格</label>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">艺术风格</label>
                                 <div className="space-y-2">
                                     <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
                                         {STYLES.map(style => (
@@ -306,11 +278,26 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                             </div>
                         </div>
 
-                        {/* Section: Advanced Settings (Model) Moved Up for clarity */}
-                         <div className="space-y-2">
-                            <div className="flex justify-between items-end">
-                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">TTS 模型引擎</label>
-                            </div>
+                        {/* Section: Story Generation Model */}
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">故事创作模型</label>
+                            <select 
+                                value={selectedGenModel}
+                                onChange={(e) => setSelectedGenModel(e.target.value)}
+                                className="w-full px-5 py-3 rounded-xl border border-slate-200 bg-white text-slate-700 focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10 outline-none text-sm font-medium shadow-sm"
+                            >
+                                {AVAILABLE_GEN_MODELS.map(m => (
+                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                ))}
+                            </select>
+                            <p className="text-[10px] text-slate-400 ml-1">
+                                {AVAILABLE_GEN_MODELS.find(m => m.id === selectedGenModel)?.desc}
+                            </p>
+                        </div>
+
+                        {/* Section: TTS Settings (Model Only) */}
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">语音引擎</label>
                             <select 
                                 value={selectedModel}
                                 onChange={(e) => setSelectedModel(e.target.value)}
@@ -323,41 +310,6 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                             <p className="text-[10px] text-slate-400 ml-1">
                                 {AVAILABLE_TTS_MODELS.find(m => m.id === selectedModel)?.desc}
                             </p>
-                        </div>
-
-                        {/* Section: Audio & Voice */}
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">
-                                讲述声音 ({isLocalModel ? '本地系统' : '云端 AI'})
-                            </label>
-                            <div className="relative">
-                                <select 
-                                    value={selectedVoice}
-                                    onChange={(e) => setSelectedVoice(e.target.value)}
-                                    className="w-full px-5 py-3 rounded-xl border border-slate-200 bg-white text-slate-700 focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10 outline-none appearance-none text-sm font-medium cursor-pointer shadow-sm disabled:opacity-50"
-                                >
-                                    {isLocalModel ? (
-                                        systemVoices.length > 0 ? (
-                                            systemVoices.map(voice => (
-                                                <option key={voice.id} value={voice.id}>
-                                                    {voice.label} — {voice.desc}
-                                                </option>
-                                            ))
-                                        ) : (
-                                            <option value="">未检测到本地中文语音，请检查浏览器设置</option>
-                                        )
-                                    ) : (
-                                        AVAILABLE_VOICES.map(voice => (
-                                            <option key={voice.id} value={voice.id}>
-                                                {voice.label} — {voice.desc}
-                                            </option>
-                                        ))
-                                    )}
-                                </select>
-                                <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-slate-500">
-                                    <span className="material-symbols-outlined">expand_more</span>
-                                </div>
-                            </div>
                         </div>
 
                         {/* Prompt & Action */}
@@ -379,277 +331,248 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                             {isLoading ? (
                                 <span className="material-symbols-outlined animate-spin">refresh</span>
                             ) : (
-                                <span className="material-symbols-outlined text-yellow-300">magic_button</span>
+                                <span className="material-symbols-outlined text-yellow-300">brush</span>
                             )}
-                            {isLoading ? '正在编写长篇剧本...' : '开始创作'}
+                            {isLoading ? '正在绘制插图、编排故事...' : '开始造梦'}
                         </button>
                     </div>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                
-                {/* 2. Left Column: Active Story Preview */}
-                <div className="lg:col-span-8 space-y-6">
-                    <div className="flex items-center justify-between">
-                         <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                            <span className="w-2 h-6 bg-brand-500 rounded-full"></span>
-                            当前剧本预览
-                        </h3>
+            {/* 2. Visualizations Grid */}
+            <div className="grid grid-cols-1 gap-8 lg:h-[500px]">
+                {/* Story Graph - Now Full Width */}
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[500px] lg:h-auto">
+                    <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 flex-none relative z-30">
+                        <div className="flex gap-2">
+                            {/* Story Selector Dropdown */}
+                            <div className="relative">
+                                <button
+                                    onClick={() => setIsSelectorOpen(!isSelectorOpen)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-slate-200 text-slate-600 hover:text-brand-600 hover:border-brand-200 transition-all shadow-sm"
+                                    title="切换当前编辑/预览的故事"
+                                >
+                                    <span className="material-symbols-outlined text-sm text-brand-500">folder_open</span>
+                                    <span className="max-w-[100px] truncate">{previewStory ? previewStory.title : '选择故事'}</span>
+                                    <span className="material-symbols-outlined text-[10px]">expand_more</span>
+                                </button>
+                                
+                                {isSelectorOpen && (
+                                    <>
+                                        <div className="fixed inset-0 z-10 cursor-default" onClick={() => setIsSelectorOpen(false)}></div>
+                                        <div className="absolute top-full left-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-100 z-20 py-2 max-h-72 overflow-y-auto custom-scrollbar animate-fade-in-up">
+                                            <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50 mb-1 border-b border-slate-50">
+                                                本地故事库 ({localStories.length})
+                                            </div>
+                                            {localStories.length === 0 ? (
+                                                <div className="px-4 py-3 text-xs text-slate-400 text-center">暂无故事</div>
+                                            ) : (
+                                                localStories.map(s => (
+                                                    <button
+                                                        key={s.id}
+                                                        onClick={() => {
+                                                            setPreviewStoryId(s.id);
+                                                            setIsSelectorOpen(false);
+                                                        }}
+                                                        className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between hover:bg-brand-50 transition-colors ${previewStoryId === s.id ? 'text-brand-600 font-bold bg-brand-50/50' : 'text-slate-600'}`}
+                                                    >
+                                                        <span className="truncate flex-1">{s.title}</span>
+                                                        {s.isOfflineReady && <span className="material-symbols-outlined text-[12px] text-green-500 ml-2" title="已就绪">check_circle</span>}
+                                                    </button>
+                                                ))
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            <div className="h-6 w-px bg-slate-200 mx-1"></div>
+
+                            <button 
+                                onClick={() => setViewMode('graph')}
+                                className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 ${viewMode === 'graph' ? 'bg-white shadow text-brand-600' : 'text-slate-400 hover:text-slate-600'}`}
+                            >
+                                <span className="material-symbols-outlined text-sm">account_tree</span>
+                                蓝图
+                            </button>
+                            <button 
+                                onClick={() => setViewMode('preview')}
+                                className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 ${viewMode === 'preview' ? 'bg-white shadow text-brand-600' : 'text-slate-400 hover:text-slate-600'}`}
+                            >
+                                <span className="material-symbols-outlined text-sm">visibility</span>
+                                预览
+                            </button>
+                        </div>
+
                         {previewStory && (
-                            <div className="flex items-center gap-3">
-                                <div className="flex bg-white p-1 rounded-lg border border-slate-200 shadow-sm">
+                            <div className="flex items-center gap-2">
+                                {/* New: Allow deleting drafts directly from preview */}
+                                {!previewStory.isOfflineReady && (
                                     <button 
-                                        onClick={() => setViewMode('graph')}
-                                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all flex items-center gap-1 ${viewMode === 'graph' ? 'bg-slate-100 text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}
+                                        onClick={(e) => handleDeleteClick(e, previewStory.id)}
+                                        className={`
+                                            flex items-center justify-center w-8 h-8 rounded-lg transition-all
+                                            ${deleteConfirmId === previewStory.id 
+                                                ? 'bg-red-500 text-white shadow-red-200 shadow-sm animate-pulse' 
+                                                : 'bg-white text-slate-400 border border-slate-200 hover:text-red-500 hover:border-red-200'}
+                                        `}
+                                        title="删除草稿"
                                     >
-                                        <span className="material-symbols-outlined text-sm">account_tree</span> 结构图
+                                        <span className="material-symbols-outlined text-sm">
+                                            {deleteConfirmId === previewStory.id ? 'check' : 'delete'}
+                                        </span>
                                     </button>
-                                    <button 
-                                        onClick={() => setViewMode('preview')}
-                                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all flex items-center gap-1 ${viewMode === 'preview' ? 'bg-slate-100 text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}
-                                    >
-                                        <span className="material-symbols-outlined text-sm">description</span> 剧本
-                                    </button>
+                                )}
+
+                                <button
+                                    onClick={() => handleDownload(previewStory)}
+                                    disabled={downloadingId === previewStory.id || previewStory.isOfflineReady}
+                                    className={`
+                                        flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm
+                                        ${previewStory.isOfflineReady 
+                                            ? 'bg-green-50 text-green-600 border border-green-100 cursor-default' 
+                                            : 'bg-brand-600 text-white hover:bg-brand-700 active:scale-95 shadow-brand-200'}
+                                        ${downloadingId === previewStory.id ? 'opacity-80 cursor-wait' : ''}
+                                    `}
+                                >
+                                    {downloadingId === previewStory.id ? (
+                                        <>
+                                            <span className="material-symbols-outlined text-sm animate-spin">refresh</span>
+                                            生成中 {downloadProgress}%
+                                        </>
+                                    ) : previewStory.isOfflineReady ? (
+                                        <>
+                                            <span className="material-symbols-outlined text-sm">check_circle</span>
+                                            绘本已就绪
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span className="material-symbols-outlined text-sm">imagesmode</span>
+                                            生成配图与配音
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex-1 relative bg-slate-50 overflow-hidden">
+                        {!previewStory ? (
+                             <div className="flex items-center justify-center h-full text-slate-400">
+                                 <p>暂无故事，请先创作一个吧！</p>
+                             </div>
+                        ) : viewMode === 'graph' ? (
+                            <StoryGraph key={previewStory.id} nodes={previewStory.nodes} startNodeId="start" />
+                        ) : (
+                            <div className="absolute inset-0 p-8 overflow-y-auto custom-scrollbar">
+                                <h3 className="text-xl font-bold text-slate-800 mb-4">{previewStory.title}</h3>
+                                <div className="space-y-6">
+                                    {getSortedNodes(previewStory).map((node, i) => (
+                                        <div key={node.id} className="relative pl-8 border-l-2 border-slate-200 pb-6 last:pb-0 last:border-0">
+                                            <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 bg-white ${node.type === 'choice' ? 'border-amber-400' : 'border-brand-400'}`}></div>
+                                            <p className="text-sm text-slate-600 mb-2">{node.text}</p>
+                                            {node.options && (
+                                                <div className="flex gap-2">
+                                                    {node.options.map(o => (
+                                                        <span key={o.label} className="text-[10px] px-2 py-1 bg-slate-100 rounded text-slate-500 border border-slate-200">
+                                                            {o.label}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         )}
                     </div>
+                </div>
+            </div>
 
-                    <div className="bg-white rounded-3xl border border-slate-200 min-h-[500px] shadow-sm flex flex-col overflow-hidden relative">
-                        {previewStory ? (
-                            <>
-                                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 backdrop-blur-sm sticky top-0 z-20">
-                                    <div>
-                                        <h4 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                                            {previewStory.title}
-                                            <span className="px-2 py-0.5 bg-brand-100 text-brand-700 text-[10px] rounded-full border border-brand-200 uppercase tracking-wide">{previewStory.style || 'Custom'}</span>
-                                        </h4>
-                                        <p className="text-xs text-slate-400 mt-1 flex items-center gap-3">
-                                            <span>{Object.keys(previewStory.nodes).length} 节点</span>
-                                            <span className="flex items-center gap-1"><span className="material-symbols-outlined text-[12px]">record_voice_over</span> 
-                                                <span className="truncate max-w-[100px]">{previewStory.voice}</span>
-                                            </span>
-                                        </p>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        
-                                        {/* OPTIMIZED DELETE BUTTON: 2-step confirmation logic directly in the UI */}
-                                        <button
-                                            onClick={(e) => handleDeleteClick(e, previewStory.id)}
-                                            className={`
-                                                flex items-center gap-1.5 px-3 py-2 rounded-full font-bold text-xs transition-all border
-                                                ${deleteConfirmId === previewStory.id
-                                                    ? 'bg-red-500 text-white border-red-600 animate-pulse shadow-red-200 shadow-lg'
-                                                    : 'bg-white text-slate-400 border-slate-200 hover:border-red-300 hover:text-red-500'
-                                                }
-                                            `}
-                                            title="删除故事"
-                                        >
-                                            <span className="material-symbols-outlined text-sm">
-                                                {deleteConfirmId === previewStory.id ? 'warning' : 'delete'}
-                                            </span>
-                                            {deleteConfirmId === previewStory.id ? "确认删除？" : "删除"}
-                                        </button>
-
-                                        {/* Download Button - Hidden if Local TTS */}
-                                        {previewStory.ttsModel !== 'browser-tts' && (
-                                            <button 
-                                                onClick={() => handleDownload(previewStory)}
-                                                disabled={!!downloadingId || previewStory.isOfflineReady}
-                                                className={`
-                                                    flex items-center gap-1.5 px-3 py-2 rounded-full font-bold text-xs transition-all border
-                                                    ${previewStory.isOfflineReady 
-                                                        ? 'bg-green-50 text-green-700 border-green-200 cursor-default'
-                                                        : downloadingId === previewStory.id 
-                                                            ? 'bg-brand-50 text-brand-700 border-brand-200' 
-                                                            : 'bg-white text-slate-600 border-slate-200 hover:border-brand-300 hover:text-brand-600'
-                                                    }
-                                                `}
-                                            >
-                                                {previewStory.isOfflineReady ? (
-                                                    <>
-                                                        <span className="material-symbols-outlined text-sm">check_circle</span>
-                                                        已缓存
-                                                    </>
-                                                ) : downloadingId === previewStory.id ? (
-                                                    <>
-                                                        <span className="material-symbols-outlined text-sm animate-spin">sync</span>
-                                                        {downloadProgress}%
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <span className="material-symbols-outlined text-sm">download_for_offline</span>
-                                                        缓存资源
-                                                    </>
-                                                )}
-                                            </button>
-                                        )}
-                                        
-                                        <button 
-                                            onClick={() => handleStartInteraction(previewStory.id)} 
-                                            className="pl-4 pr-5 py-2 bg-green-500 hover:bg-green-600 text-white rounded-full font-bold shadow-lg shadow-green-500/20 flex items-center gap-2 transition-transform hover:scale-105 active:scale-95"
-                                        >
-                                            <div className="w-6 h-6 bg-white rounded-full flex items-center justify-center">
-                                                <span className="material-symbols-outlined text-green-600 text-sm">play_arrow</span>
-                                            </div>
-                                            开始互动
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <div className="flex-1 bg-slate-50 overflow-hidden relative">
-                                    {viewMode === 'graph' ? (
-                                        <StoryGraph nodes={previewStory.nodes} startNodeId="start" />
-                                    ) : (
-                                        <div className="absolute inset-0 overflow-auto p-6 custom-scrollbar bg-slate-100">
-                                            <div className="space-y-6 max-w-2xl mx-auto pb-20">
-                                                {getSortedNodes(previewStory).map((node) => (
-                                                    <div key={node.id} className={`
-                                                        bg-white p-6 rounded-xl border shadow-sm relative overflow-hidden
-                                                        ${node.id === 'start' ? 'border-brand-200 shadow-md ring-1 ring-brand-100' : 'border-slate-200'}
-                                                        ${node.type === 'end' ? 'bg-slate-50 border-slate-300' : ''}
-                                                    `}>
-                                                        {/* Badge */}
-                                                        {node.id === 'start' && <div className="absolute top-0 right-0 px-3 py-1 bg-brand-500 text-white text-[10px] font-bold rounded-bl-xl">START</div>}
-                                                        {node.type === 'end' && <div className="absolute top-0 right-0 px-3 py-1 bg-slate-700 text-white text-[10px] font-bold rounded-bl-xl">THE END</div>}
-                                                        {node.type === 'linear' && <div className="absolute top-0 right-0 px-3 py-1 bg-blue-100 text-blue-600 text-[10px] font-bold rounded-bl-xl">SCENE</div>}
-
-                                                        {/* Scene Header */}
-                                                        <div className="flex items-center gap-2 mb-4 opacity-50">
-                                                            <span className="text-[10px] font-mono uppercase tracking-widest font-bold">SCENE: {node.id}</span>
-                                                            <div className="h-px flex-1 bg-slate-200"></div>
-                                                        </div>
-
-                                                        {/* Narrative */}
-                                                        <div className="flex gap-4 mb-4">
-                                                            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 flex-none">
-                                                                <span className="material-symbols-outlined">auto_stories</span>
-                                                            </div>
-                                                            <div className="flex-1">
-                                                                <p className="font-serif text-slate-700 text-lg leading-relaxed text-justify">
-                                                                    {node.text}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-
-                                                        {/* Interaction Block */}
-                                                        {(node.type === 'choice' || node.type === 'linear') && (
-                                                            <div className={`rounded-xl p-4 border mt-2 ${node.type === 'linear' ? 'bg-blue-50/50 border-blue-100/50' : 'bg-brand-50/50 border-brand-100/50'}`}>
-                                                                {node.type === 'choice' && node.question && (
-                                                                    <div className="flex gap-3 mb-3">
-                                                                        <span className="text-xs font-bold text-brand-500 bg-brand-100 px-2 py-0.5 rounded self-start">提问</span>
-                                                                        <p className="font-bold text-brand-800 text-sm">{node.question}</p>
-                                                                    </div>
-                                                                )}
-                                                                
-                                                                {node.type === 'choice' && node.options && node.options.length > 0 && (
-                                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pl-0 sm:pl-10">
-                                                                        {node.options.map((opt, i) => (
-                                                                            <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-white border border-brand-100 shadow-sm">
-                                                                                <div>
-                                                                                    <span className="text-xs font-bold text-slate-700 block">“{opt.label}”</span>
-                                                                                    {opt.text !== opt.label && <span className="text-[10px] text-slate-400 block line-clamp-1">{opt.text}</span>}
-                                                                                </div>
-                                                                                <div className="flex items-center text-[10px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
-                                                                                    <span>to</span>
-                                                                                    <span className="material-symbols-outlined text-[10px] mx-0.5">arrow_forward</span>
-                                                                                    <span className="font-mono">{opt.next}</span>
-                                                                                </div>
-                                                                            </div>
-                                                                        ))}
-                                                                    </div>
-                                                                )}
-
-                                                                {node.type === 'linear' && node.next && (
-                                                                    <div className="flex items-center justify-between p-2 rounded-lg bg-white/50 border border-blue-100 shadow-sm">
-                                                                        <span className="text-xs font-bold text-slate-500 italic">自动继续...</span>
-                                                                        <div className="flex items-center text-[10px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
-                                                                            <span>to</span>
-                                                                            <span className="material-symbols-outlined text-[10px] mx-0.5">arrow_forward</span>
-                                                                            <span className="font-mono">{node.next}</span>
-                                                                        </div>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ))}
-                                                
-                                                {/* Bottom Spacer/Footer */}
-                                                <div className="text-center opacity-30">
-                                                    <span className="material-symbols-outlined text-4xl">more_horiz</span>
-                                                </div>
-                                            </div>
+            {/* 3. Story List */}
+            <div className="space-y-4">
+                 <h3 className="text-xl font-bold text-slate-800 px-2 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-brand-500">history_edu</span>
+                    故事库 ({libraryStories.length})
+                 </h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {libraryStories.map(story => (
+                        <div 
+                            key={story.id} 
+                            onClick={() => setPreviewStoryId(story.id)}
+                            className={`group relative bg-white rounded-2xl p-4 border-2 transition-all cursor-pointer hover:-translate-y-1 hover:shadow-xl ${previewStoryId === story.id ? 'border-brand-400 ring-4 ring-brand-50 shadow-lg' : 'border-transparent hover:border-brand-200 shadow-sm'}`}
+                        >
+                            <div className="flex gap-4">
+                                <div className="w-20 h-20 rounded-xl bg-slate-100 overflow-hidden flex-none relative">
+                                    <img src={story.cover} alt="Cover" className="w-full h-full object-cover" />
+                                    {story.isOfflineReady && (
+                                        <div className="absolute bottom-1 right-1 bg-green-500 text-white p-0.5 rounded-full" title="已缓存">
+                                            <span className="material-symbols-outlined text-[10px] block">wifi_off</span>
                                         </div>
                                     )}
                                 </div>
-                            </>
-                        ) : (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
-                                <span className="material-symbols-outlined text-6xl mb-4 opacity-30">history_edu</span>
-                                <p className="font-medium">暂无预览内容，请先生成故事</p>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* 3. Right Column: Stats & Library */}
-                <div className="lg:col-span-4 space-y-8 flex flex-col h-full">
-                    
-                    {/* NEW: Chat Data Dashboard Card */}
-                    <div className="h-[400px] flex-none transform transition-transform hover:scale-[1.01] duration-500">
-                         <ChatDataDashboard userStats={userStats} reportData={lastReport} statDeltas={statDeltas} />
-                    </div>
-
-                    {/* Library List (Takes remaining height) */}
-                    <div className="space-y-4 flex-1 min-h-0 flex flex-col">
-                        <h3 className="text-lg font-bold text-slate-800 px-2 flex items-center justify-between flex-none">
-                            <span>故事档案</span>
-                            <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full">{localStories.length}</span>
-                        </h3>
-                        <div className="space-y-3 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                            {localStories.map(story => (
-                                <div 
-                                    key={story.id} 
-                                    onClick={() => setPreviewStoryId(story.id)}
-                                    className={`p-3 rounded-2xl border transition-all cursor-pointer flex gap-3 group relative overflow-hidden ${previewStoryId === story.id ? 'bg-brand-600 border-brand-700 text-white shadow-lg shadow-brand-200 transform scale-[1.02]' : 'bg-white border-slate-200 hover:border-brand-300 hover:shadow-md'}`}
-                                >
-                                    <img src={story.cover} alt="" className="w-16 h-16 rounded-xl object-cover bg-slate-200" />
-                                    <div className="flex-1 min-w-0 flex flex-col justify-center">
-                                        <h4 className={`font-bold truncate text-sm mb-1 ${previewStoryId === story.id ? 'text-white' : 'text-slate-800'}`}>{story.title}</h4>
-                                        <div className="flex items-center gap-2">
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded border truncate max-w-[80px] ${previewStoryId === story.id ? 'bg-white/20 border-white/10 text-white/80' : 'bg-slate-50 border-slate-100 text-slate-500'}`}>
-                                                {story.topic}
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-start">
+                                        <h4 className="font-bold text-slate-800 truncate pr-2">{story.title}</h4>
+                                        <button 
+                                            onClick={(e) => handleDeleteClick(e, story.id)}
+                                            className={`w-6 h-6 flex items-center justify-center rounded-full transition-colors ${deleteConfirmId === story.id ? 'bg-red-500 text-white animate-pulse' : 'text-slate-300 hover:bg-red-50 hover:text-red-500'}`}
+                                            title="删除"
+                                        >
+                                            <span className="material-symbols-outlined text-sm">
+                                                {deleteConfirmId === story.id ? 'check' : 'delete'}
                                             </span>
-                                            {story.isOfflineReady && (
-                                                <span className={`material-symbols-outlined text-[14px] ${previewStoryId === story.id ? 'text-green-400' : 'text-green-600'}`}>
-                                                    check_circle
-                                                </span>
-                                            )}
-                                            <span className={`text-[10px] ml-auto ${previewStoryId === story.id ? 'text-white/40' : 'text-slate-300'}`}>{story.date}</span>
-                                        </div>
+                                        </button>
                                     </div>
+                                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">{story.topic}</p>
                                     
-                                    {/* Action Buttons */}
-                                    <div className="flex items-center gap-1 self-center">
-                                         {/* Play Button - Only shows when selected to avoid clutter */}
-                                        {previewStoryId === story.id && (
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); handleStartInteraction(story.id); }} 
-                                                className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"
-                                                title="播放"
-                                            >
-                                                <span className="material-symbols-outlined text-lg">play_arrow</span>
-                                            </button>
-                                        )}
+                                    <div className="flex items-center gap-2 mt-3">
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${story.status === 'completed' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>
+                                            {story.status === 'completed' ? '已完成' : '草稿'}
+                                        </span>
+                                        <span className="text-xs text-slate-400 flex items-center gap-0.5">
+                                            <span className="material-symbols-outlined text-[10px]">mic</span>
+                                            {story.voice === 'Puck' ? '淘气包' : 
+                                             story.voice === 'Kore' ? '温柔姐姐' : 
+                                             story.voice === 'Charon' ? '老爷爷' : 
+                                             story.voice === 'Fenrir' ? '探险家' : 
+                                             story.voice === 'Zephyr' ? '小精灵' : 
+                                             story.voice === 'Aoede' ? '百灵鸟' : 'AI推荐'}
+                                        </span>
                                     </div>
                                 </div>
-                            ))}
+                            </div>
+                            
+                            {/* Action Buttons (Hover) */}
+                            <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleDownload(story); }}
+                                    className={`w-8 h-8 rounded-full flex items-center justify-center border shadow-sm transition-colors ${story.isOfflineReady ? 'bg-green-50 text-green-600 border-green-200' : 'bg-white text-slate-400 border-slate-200 hover:text-brand-600 hover:border-brand-200'}`}
+                                    title="生成配图与配音"
+                                >
+                                    {downloadingId === story.id ? (
+                                        <span className="text-[10px] font-bold">{downloadProgress}%</span>
+                                    ) : (
+                                        <span className="material-symbols-outlined text-sm">
+                                            {story.isOfflineReady ? 'check_circle' : 'imagesmode'}
+                                        </span>
+                                    )}
+                                </button>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleStartInteraction(story.id); }}
+                                    className="w-8 h-8 rounded-full bg-brand-600 text-white flex items-center justify-center shadow-md hover:bg-brand-500 hover:scale-110 transition-all"
+                                    title="开始播放"
+                                >
+                                    <span className="material-symbols-outlined text-sm">play_arrow</span>
+                                </button>
+                            </div>
                         </div>
-                    </div>
-
-                </div>
+                    ))}
+                    {libraryStories.length === 0 && (
+                        <div className="col-span-full py-8 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">
+                            <p>暂无已完成的故事。请在上方生成故事并点击“生成配图与配音”以加入故事库。</p>
+                        </div>
+                    )}
+                 </div>
             </div>
         </div>
     );

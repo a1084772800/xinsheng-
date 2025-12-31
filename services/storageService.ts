@@ -2,10 +2,11 @@
 import { Story } from "../types";
 
 const DB_NAME = 'HeartVoiceStoriesDB';
-const DB_VERSION = 4; // BUMP TO 4: Force clear cache to fix volume consistency issues
+const DB_VERSION = 5; 
 const STORE_STORIES = 'stories';
 const STORE_AUDIO = 'audio_cache';
 const STORE_IMAGES = 'image_cache';
+const STORE_SETTINGS = 'settings';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -17,27 +18,19 @@ const openDB = (): Promise<IDBDatabase> => {
 
         request.onupgradeneeded = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
-            const transaction = (event.target as IDBOpenDBRequest).transaction;
-
-            // Clear old stores if they exist to ensure fresh data format
-            if (db.objectStoreNames.contains(STORE_AUDIO)) {
-                db.deleteObjectStore(STORE_AUDIO);
-            }
-            if (db.objectStoreNames.contains(STORE_IMAGES)) {
-                 // Optional: Clear images too just to be clean, or keep them if preferred.
-                 // Keeping them usually safe, but let's be safe for consistency.
-                 // db.deleteObjectStore(STORE_IMAGES);
-            }
-
-            // Create/Re-create stores
+            
+            // Create stores if they don't exist
             if (!db.objectStoreNames.contains(STORE_STORIES)) {
                 db.createObjectStore(STORE_STORIES, { keyPath: 'id' });
             }
             if (!db.objectStoreNames.contains(STORE_AUDIO)) {
-                db.createObjectStore(STORE_AUDIO); // Key will be custom string
+                db.createObjectStore(STORE_AUDIO); 
             }
             if (!db.objectStoreNames.contains(STORE_IMAGES)) {
-                db.createObjectStore(STORE_IMAGES); // Key will be custom string
+                db.createObjectStore(STORE_IMAGES); 
+            }
+            if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
+                db.createObjectStore(STORE_SETTINGS); 
             }
         };
 

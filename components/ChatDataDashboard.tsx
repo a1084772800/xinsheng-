@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { UserStats, ReportData } from '../types';
 import { 
@@ -11,14 +12,14 @@ interface ChatDataDashboardProps {
     statDeltas?: Partial<UserStats>;
 }
 
-// Configuration for the 6 Dimensions
-const TRAIT_CONFIG: Record<string, { label: string; color: string; bg: string; text: string }> = {
-    confidence: { label: '自信', color: '#3b82f6', bg: 'bg-blue-500', text: 'text-blue-600' },
-    social: { label: '社交', color: '#ec4899', bg: 'bg-pink-500', text: 'text-pink-600' },
-    logic: { label: '逻辑', color: '#eab308', bg: 'bg-yellow-500', text: 'text-yellow-600' },
-    resilience: { label: '抗挫', color: '#ef4444', bg: 'bg-red-500', text: 'text-red-600' },
-    independence: { label: '独立', color: '#22c55e', bg: 'bg-green-500', text: 'text-green-600' },
-    creativity: { label: '创造', color: '#a855f7', bg: 'bg-purple-500', text: 'text-purple-600' },
+// Updated Configuration for Reading Core Competencies
+const TRAIT_CONFIG: Record<string, { label: string; color: string; bg: string; text: string; icon: string }> = {
+    observation: { label: '观察力', color: '#3b82f6', bg: 'bg-blue-500', text: 'text-blue-600', icon: 'visibility' },
+    empathy: { label: '共情力', color: '#ec4899', bg: 'bg-pink-500', text: 'text-pink-600', icon: 'favorite' },
+    imagination: { label: '想象力', color: '#a855f7', bg: 'bg-purple-500', text: 'text-purple-600', icon: 'auto_awesome' },
+    criticalThinking: { label: '思辨力', color: '#eab308', bg: 'bg-yellow-500', text: 'text-yellow-600', icon: 'psychology' },
+    expression: { label: '表达力', color: '#22c55e', bg: 'bg-green-500', text: 'text-green-600', icon: 'record_voice_over' },
+    engagement: { label: '专注度', color: '#ef4444', bg: 'bg-red-500', text: 'text-red-600', icon: 'schedule' },
 };
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -61,22 +62,16 @@ export const ChatDataDashboard: React.FC<ChatDataDashboardProps> = ({ userStats,
         return Object.keys(statDeltas).filter(key => (statDeltas[key] || 0) > 0);
     }, [statDeltas]);
 
-    // 3. Evidence / Quote List
-    const evidenceList = useMemo(() => {
-        if (!reportData?.evidencePoints) return [];
-        return reportData.evidencePoints.slice(0, 3);
-    }, [reportData]);
-
     return (
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-full group hover:shadow-md transition-shadow duration-300">
             {/* Header */}
             <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                 <div>
                     <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                        <span className="material-symbols-outlined text-brand-500">monitoring</span>
-                        成长数据
+                        <span className="material-symbols-outlined text-brand-500">local_library</span>
+                        阅读素养
                     </h3>
-                    <p className="text-xs text-slate-400 mt-0.5">本局游戏能力分析</p>
+                    <p className="text-xs text-slate-400 mt-0.5">AI 深度分析阅读互动表现</p>
                 </div>
                 {activeGrowthKeys.length > 0 && (
                     <div className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full animate-pulse">
@@ -139,7 +134,7 @@ export const ChatDataDashboard: React.FC<ChatDataDashboardProps> = ({ userStats,
                         <div className="flex justify-between items-center mb-4">
                             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
                                 <span className="material-symbols-outlined text-[14px]">bolt</span>
-                                本局经验值获取
+                                本次阅读获得经验
                             </h4>
                         </div>
                         <div className="space-y-4">
@@ -153,6 +148,7 @@ export const ChatDataDashboard: React.FC<ChatDataDashboardProps> = ({ userStats,
                                     <div key={key}>
                                         <div className="flex justify-between items-end text-xs mb-1.5">
                                             <span className={`font-bold ${trait.text} flex items-center gap-1`}>
+                                                <span className="material-symbols-outlined text-[14px]">{trait.icon}</span>
                                                 {trait.label}
                                                 <span className="bg-white px-1.5 rounded-full text-[9px] border shadow-sm">Lv.{Math.floor(current/10)}</span>
                                             </span>
@@ -192,19 +188,18 @@ export const ChatDataDashboard: React.FC<ChatDataDashboardProps> = ({ userStats,
 
                 {/* 3. Highlight Quote & Insight */}
                 {reportData?.highlightQuote && (
-                    <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 rounded-xl p-4 shadow-sm relative overflow-hidden">
-                        <div className="flex items-center gap-2 mb-2 text-orange-600">
-                             <span className="material-symbols-outlined text-lg">psychology</span>
-                             <h4 className="text-xs font-bold uppercase">心声洞察</h4>
+                    <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-100 rounded-xl p-4 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center gap-2 mb-2 text-indigo-600">
+                             <span className="material-symbols-outlined text-lg">format_quote</span>
+                             <h4 className="text-xs font-bold uppercase">闪光时刻</h4>
                         </div>
                         <p className="text-sm text-slate-700 italic leading-relaxed mb-2 relative z-10">
                             "{reportData.highlightQuote}"
                         </p>
-                        <div className="h-px bg-orange-200/50 w-full my-2"></div>
-                        <p className="text-xs text-orange-800/80 leading-snug">
-                            {reportData.highlightAnalysis || "孩子在选择中展现了潜意识的倾向。"}
+                        <div className="h-px bg-indigo-200/50 w-full my-2"></div>
+                        <p className="text-xs text-indigo-800/80 leading-snug">
+                            {reportData.highlightAnalysis || "孩子在阅读中展现了深刻的理解力。"}
                         </p>
-                        <span className="material-symbols-outlined absolute -bottom-2 -right-2 text-6xl text-orange-100 opacity-50 pointer-events-none">format_quote</span>
                     </div>
                 )}
             </div>

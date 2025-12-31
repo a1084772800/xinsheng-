@@ -10,6 +10,9 @@ interface ChildLibraryProps {
 
 export const ChildLibrary: React.FC<ChildLibraryProps> = ({ stories, onPlay }) => {
     
+    // Only show stories that are ready for consumption (assets generated)
+    const availableStories = stories.filter(s => s.isOfflineReady);
+
     // Unlock audio then play
     const handlePlay = (storyId: string) => {
         initializeAudio();
@@ -26,13 +29,13 @@ export const ChildLibrary: React.FC<ChildLibraryProps> = ({ stories, onPlay }) =
                     <div>
                         <h1 className="text-4xl font-bold text-slate-800 tracking-tight mb-2">我的故事书</h1>
                         <p className="text-slate-500 font-bold bg-white/60 px-3 py-1 rounded-full inline-block">
-                            一共藏着 {stories.length} 个好听的故事
+                            一共藏着 {availableStories.length} 个好听的故事
                         </p>
                     </div>
                 </header>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 pb-20">
-                    {stories.map(story => (
+                    {availableStories.map(story => (
                         <button 
                             key={story.id}
                             onClick={() => handlePlay(story.id)}
@@ -80,7 +83,7 @@ export const ChildLibrary: React.FC<ChildLibraryProps> = ({ stories, onPlay }) =
                     ))}
 
                     {/* Create New Placeholder / Empty State */}
-                    {stories.length === 0 && (
+                    {availableStories.length === 0 && (
                          <div className="col-span-full flex flex-col items-center justify-center py-24 text-slate-400 border-4 border-dashed border-slate-200 rounded-[3rem] bg-white/50">
                             <span className="material-symbols-outlined text-8xl mb-6 text-slate-300">import_contacts</span>
                             <p className="text-2xl font-bold text-slate-500 mb-2">书架是空的哦</p>

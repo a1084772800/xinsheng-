@@ -1,83 +1,71 @@
-
 export interface StoryOption {
     label: string;
-    text: string;
-    keywords?: string[];
+    text: string; // What the character/child says
     next: string;
-    type: string; // Allow flexible strings from AI
+    analysis?: string; // Why this option shows understanding/imagination
 }
 
 export interface StoryNode {
     id: string;
-    text: string;
+    text: string; // Main story text
     audioText?: string;
-    imagePrompt: string;
-    type: 'choice' | 'linear' | 'end'; // Added 'linear'
-    next?: string; // For linear nodes to auto-advance
-    question?: string;
+    
+    // Picture Book Specifics
+    narrativeGoal?: string; // Purpose of this page
+    visual: string; // Detailed visual description for AI
+    layout?: string; // Composition suggestion
+    
+    type: 'choice' | 'linear' | 'end';
+    next?: string;
+    question?: string; // Deep understanding question
     options?: StoryOption[];
+    
+    imagePrompt: string; // The final prompt sent to Imagen
+    
+    // Compatibility
+    sceneDescriptionEN?: string;
 }
 
 export interface Story {
     id: string;
     title: string;
     cover: string;
-    topic: string; // Keep for display
-    goal: string;  // Keep for display/metadata
-    voice: string; // Selected voice name
-    style: string; // Story style
-    ttsModel?: string; // New: Specific TTS model used
-    // playbackSpeed removed
+    topic: string;
+    goal: string; 
+    voice: string;
+    style: string;
+    styleInstructions?: string; // Global style config for consistency
+    ttsModel?: string;
     date: string;
     status: 'draft' | 'completed';
     nodes: Record<string, StoryNode>; 
-    insight?: string;
     tags: string[];
     isOfflineReady?: boolean;
-}
-
-export interface UserStats {
-    confidence: number;    // Replaces Security
-    social: number;        // Replaces Empathy
-    logic: number;         // Replaces Honesty
-    resilience: number;    // Kept (AQ)
-    independence: number;  // Kept
-    creativity: number;    // Replaces Imagination
-    [key: string]: number; // Allow index signature for dynamic access
 }
 
 export interface UserChoice {
     step: string;
     selection: string;
-    type: string;
-    transcript?: string; // The specific command that triggered the choice
-    speechHistory?: string[]; // NEW: All spoken phrases at this step
+    type: string; // Now used for general category of interaction
+    transcript?: string;
+    speechHistory?: string[];
 }
 
-// New Interface for specific psychological mapping evidence
-export interface PsychologicalEvidence {
-    trait: string; // e.g. "Confidence"
-    quote: string; // What the child said
-    context: string; // The story situation
-    analysis: string; // Deep psychological interpretation
-    timestamp: number;
+export interface UserStats {
+    [key: string]: number;
 }
 
-// New Interface for the Advanced Report
 export interface ReportDimension {
-    subject: string; // e.g., "Social", "Logic"
-    score: number; // The performance score in this specific story (0-100)
-    delta: number; // The change applied to the long-term stats (e.g. +5, -2)
-    reason: string; // Brief reason for the change
+    subject: string;
+    score: number;
 }
 
 export interface ReportData {
+    dimensions: ReportDimension[];
+    keywords: string[];
     summary: string;
-    traitAnalysis: string; // Deep text analysis
+    highlightQuote?: string;
+    highlightAnalysis?: string;
+    traitAnalysis: string;
     suggestion: string;
-    dimensions: ReportDimension[]; // For Radar Chart & Stats Update
-    highlightQuote?: string; // The most revealing thing the child said
-    highlightAnalysis?: string; // Analysis of that quote
-    keywords: string[]; // 3-4 keywords describing the state (e.g. "Brave", "Hesitant")
-    evidencePoints?: PsychologicalEvidence[]; // NEW: Detailed breakdown of conversation to traits
 }

@@ -3,74 +3,10 @@ import React, { useState, useEffect } from 'react';
 import { ParentDashboard } from './components/ParentDashboard';
 import { StoryPlayer } from './components/StoryPlayer';
 import { ChildLibrary } from './components/ChildLibrary';
-import { ReportView } from './components/ReportView';
-import { generateParentingReport, backgroundCacheHighPriority } from './services/geminiService';
+import { backgroundCacheHighPriority } from './services/geminiService';
 import { storageService } from './services/storageService';
-import { Story, UserChoice, UserStats, ReportData } from './types';
-
-// Mock Data for Initial State (Updated with new traits)
-const INITIAL_STORY: Story = {
-    id: 'demo_xian_adventure',
-    title: "壮壮的西安奇幻历险记",
-    topic: "文化探索",
-    goal: "creativity",
-    voice: "Puck", 
-    style: "Adventure",
-    date: new Date().toISOString().split('T')[0],
-    status: "completed",
-    cover: "https://picsum.photos/seed/xian_terracotta_warrior/400/400",
-    tags: ["西安", "兵马俑", "历史", "奇幻"],
-    nodes: {
-        start: {
-            id: 'start',
-            text: "壮壮来到了西安的兵马俑博物馆。这里有好几千个陶土做的士兵，整整齐齐地站着，看起来威风极了！突然，壮壮发现最前排的一个将军俑眨了眨眼睛，好像在对他招手呢！",
-            audioText: "壮壮来到了西安的兵马俑博物馆。这里有好几千个陶土做的士兵，整整齐齐地站着，看起来威风极了！突然，壮壮发现最前排的一个将军俑眨了眨眼睛，好像在对他招手呢！",
-            imagePrompt: "Terracotta Warriors museum Xi'an china cartoon style magical glowing general winking at little boy",
-            type: "choice",
-            question: "壮壮应该怎么办呢？",
-            options: [
-                { label: "跟过去", text: "我要去看看他在干什么！", keywords: ["去", "跟", "看"], next: "node_follow_general", type: "independence" },
-                { label: "告诉妈妈", text: "妈妈，那个兵马俑动了！", keywords: ["妈妈", "怕", "告诉"], next: "node_tell_mom", type: "confidence" }
-            ]
-        },
-        node_follow_general: {
-            id: 'node_follow_general',
-            text: "壮壮趁大人不注意，悄悄溜到了栏杆旁边。将军俑竟然开口说话了，声音像敲钟一样洪亮：“小朋友，我的青铜宝剑不见了，你能帮我找找吗？”",
-            imagePrompt: "Underground magical tunnel ancient china cartoon style terracotta general talking to little boy close up",
-            type: "choice",
-            question: "要帮将军找宝剑吗？",
-            options: [
-                { label: "帮忙找", text: "别担心，我帮你找！", keywords: ["帮", "找", "好"], next: "node_find_sword", type: "social" },
-                { label: "问问题", text: "你是怎么活过来的呀？", keywords: ["问", "活", "怎么"], next: "node_ask_magic", type: "creativity" }
-            ]
-        },
-        node_find_sword: {
-            id: 'node_find_sword',
-            text: "壮壮在角落里发现了一闪一闪的光芒，原来是一只贪吃的小老鼠偷走了宝剑，正准备用来切肉夹馍呢！壮壮赶跑了老鼠，拿回了宝剑。将军俑送给他一枚秦朝的古钱币作为感谢。",
-            imagePrompt: "Cartoon mouse holding ancient bronze sword trying to cut a roujiamo chinese burger",
-            type: "end"
-        },
-        node_ask_magic: {
-            id: 'node_ask_magic',
-            text: "将军俑哈哈大笑：“因为你充满了想象力呀！只要相信奇迹，历史就会活过来。”说完，他化作一道金光，带着壮壮飞上了大雁塔的顶端，俯瞰整个西安美丽的夜景。",
-            imagePrompt: "Flying over Giant Wild Goose Pagoda Xi'an night view magical golden light fantasy style",
-            type: "end"
-        },
-        node_tell_mom: {
-            id: 'node_tell_mom',
-            text: "妈妈笑着摸了摸壮壮的头：“傻孩子，那是灯光晃眼看错了吧？是不是肚子饿了？走，妈妈带你去回民街吃好吃的！”",
-            imagePrompt: "Mom comforting boy in museum cartoon style warm lighting",
-            type: "linear",
-            next: "node_food_street"
-        },
-        node_food_street: {
-            id: 'node_food_street',
-            text: "回民街真热闹呀！到处都是香喷喷的味道。壮壮大口吃着羊肉泡馍，心想：虽然没去探险，但西安的美食也像魔法一样让人开心！",
-            imagePrompt: "Xi'an Muslim Quarter street food market bustling cartoon style boy eating soup bowl",
-            type: "end"
-        }
-    }
-};
+import { Story, UserChoice } from './types';
+import { INITIAL_STORY } from './constants';
 
 const App: React.FC = () => {
     // API Key State
@@ -82,23 +18,6 @@ const App: React.FC = () => {
     const [isPlaying, setIsPlaying] = useState(false); // Controls Player vs Library view in Kid mode
     const [choices, setChoices] = useState<UserChoice[]>([]);
     
-    // Stats State (Updated Keys)
-    const [userStats, setUserStats] = useState<UserStats>({
-        confidence: 0,
-        social: 0,
-        logic: 0,
-        resilience: 0,
-        independence: 0,
-        creativity: 0
-    });
-    // Track the changes from the LAST session to display animations
-    const [statDeltas, setStatDeltas] = useState<Partial<UserStats>>({});
-
-    // Report State
-    const [showReport, setShowReport] = useState(false);
-    const [reportData, setReportData] = useState<ReportData | null>(null);
-    const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-
     // Feature 0: Check API Key (Environment Specific)
     useEffect(() => {
         const checkKey = async () => {
@@ -192,7 +111,6 @@ const App: React.FC = () => {
         setChoices([]);
         setMode('kid');
         setIsPlaying(true); // Jump directly to player
-        setShowReport(false);
     };
 
     // Called when clicking a card in Child Library
@@ -209,46 +127,8 @@ const App: React.FC = () => {
     const handleStoryComplete = async () => {
         if (!currentStoryId) return;
         
-        setIsGeneratingReport(true);
-        setMode('parent'); // Switch back to parent view to show report
+        setMode('parent'); // Switch back to parent view
         setIsPlaying(false); // Reset player state
-
-        const story = stories.find(s => s.id === currentStoryId);
-        const title = story?.title || "未知故事";
-        
-        // 1. Generate Report via AI
-        const report = await generateParentingReport(title, choices);
-        
-        // 2. Precise Mapping: Update Stats based on AI Delta values
-        const newDeltas: Partial<UserStats> = {};
-        const newStats = { ...userStats };
-
-        report.dimensions.forEach(dim => {
-            const subject = dim.subject; 
-            const delta = dim.delta || 0; 
-            
-            // Robust Fuzzy Matching for Mapping Keys to new 6 Dimensions
-            let key = '';
-            if (subject.match(/Confidence|Security|Safe|Sure/i)) key = 'confidence';
-            else if (subject.match(/Social|Empathy|Kind|Love/i)) key = 'social';
-            else if (subject.match(/Logic|Think|Honest|Reason/i)) key = 'logic';
-            else if (subject.match(/Resilience|Brave|Courage|Grit/i)) key = 'resilience';
-            else if (subject.match(/Independence|Self|Solo/i)) key = 'independence';
-            else if (subject.match(/Creativity|Create|Imagine|Dream/i)) key = 'creativity';
-
-            if (key && delta !== 0) {
-                // Apply delta directly, clamping between 0 and 100
-                newStats[key] = Math.max(0, Math.min(100, (newStats[key] || 0) + delta));
-                newDeltas[key] = delta;
-            }
-        });
-
-        setUserStats(newStats);
-        setStatDeltas(newDeltas);
-        
-        setReportData(report);
-        setShowReport(true);
-        setIsGeneratingReport(false);
     };
 
     const currentStory = stories.find(s => s.id === currentStoryId);
@@ -288,10 +168,11 @@ const App: React.FC = () => {
         return null; // Loading state
     }
 
+    // --- FIX: Use 100dvh for WeChat compatibility and add safe-area padding ---
     return (
-        <div className="h-screen w-full flex flex-col bg-slate-50">
+        <div className="h-screen supports-[height:100dvh]:h-[100dvh] w-full flex flex-col bg-slate-50 overflow-hidden">
             {/* Navbar */}
-            <nav className="bg-white/90 backdrop-blur-md border-b border-slate-200 z-50 flex-none shadow-sm">
+            <nav className="bg-white/90 backdrop-blur-md border-b border-slate-200 z-50 flex-none shadow-sm pt-[env(safe-area-inset-top)]">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
                     <div className="flex justify-between h-16">
                         <div className="flex items-center gap-3">
@@ -326,32 +207,20 @@ const App: React.FC = () => {
                 </div>
             </nav>
 
-            {/* Main Content */}
-            <main className="flex-1 relative overflow-hidden w-full">
+            {/* Main Content with Safe Area Bottom Padding */}
+            <main className="flex-1 relative w-full pb-[env(safe-area-inset-bottom)]">
                 {mode === 'parent' ? (
-                    <div className="absolute inset-0 overflow-y-auto p-4 lg:p-8 animate-fade-in">
-                        {isGeneratingReport && (
-                             <div className="absolute inset-0 z-40 bg-white/80 backdrop-blur flex items-center justify-center flex-col">
-                                <span className="material-symbols-outlined text-4xl animate-spin text-brand-500 mb-2">sync</span>
-                                <p className="text-slate-600 font-bold">正在分析孩子心理...</p>
-                             </div>
-                        )}
+                    <div className="absolute inset-0 overflow-y-auto p-4 lg:p-8 animate-fade-in custom-scrollbar">
                         <ParentDashboard 
                             stories={stories} 
-                            userStats={userStats}
-                            statDeltas={statDeltas}
-                            lastReport={reportData}
                             onStoryGenerated={handleStoryGenerated} 
                             onPlayStory={handlePlayStory} 
                             onStoryUpdate={handleStoryUpdate}
                             onStoryDelete={handleStoryDelete}
                         />
-                        {showReport && reportData && (
-                            <ReportView report={reportData} onClose={() => setShowReport(false)} />
-                        )}
                     </div>
                 ) : (
-                    <div className="absolute inset-0 animate-slide-in-right bg-white">
+                    <div className="absolute inset-0 animate-slide-in-right bg-white overflow-hidden">
                         {isPlaying && currentStory ? (
                             <StoryPlayer 
                                 story={currentStory} 

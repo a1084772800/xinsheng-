@@ -1,11 +1,16 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>心声故事 Heart-Voice Stories</title>
+    <!-- Simple Emoji Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Nunito:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Added ZCOOL KuaiLe for the cute font style requested in the reference -->
+    <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,1,0" rel="stylesheet">
     <script>
         tailwind.config = {
@@ -14,6 +19,7 @@
                     fontFamily: {
                         sans: ['"Noto Sans SC"', '"Nunito"', 'sans-serif'],
                         mono: ['"Fira Code"', 'Consolas', 'monospace'],
+                        cute: ['"ZCOOL KuaiLe"', 'cursive'],
                     },
                     colors: {
                         brand: {
@@ -36,9 +42,7 @@
                         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
                         'sound-wave': 'sound-wave 1.2s ease-in-out infinite',
                         'listening-ring': 'listening-ring 2s infinite',
-                        'orbit': 'orbit 20s linear infinite',
-                        'orbit-reverse': 'orbit-reverse 25s linear infinite',
-                        'float': 'float 6s ease-in-out infinite',
+                        'scan-line': 'scan 2s linear forwards',
                     },
                     keyframes: {
                         'sound-wave': {
@@ -49,17 +53,11 @@
                             '0%': { transform: 'scale(1)', opacity: '0.8' },
                             '100%': { transform: 'scale(2.5)', opacity: '0' },
                         },
-                        'orbit': {
-                            '0%': { transform: 'rotate(0deg)' },
-                            '100%': { transform: 'rotate(360deg)' },
-                        },
-                        'orbit-reverse': {
-                            '0%': { transform: 'rotate(360deg)' },
-                            '100%': { transform: 'rotate(0deg)' },
-                        },
-                        'float': {
-                            '0%, 100%': { transform: 'translateY(0)' },
-                            '50%': { transform: 'translateY(-10px)' },
+                        'scan': {
+                            '0%': { top: '0%', opacity: '0' },
+                            '10%': { opacity: '1' },
+                            '90%': { opacity: '1' },
+                            '100%': { top: '100%', opacity: '0' },
                         }
                     }
                 }
@@ -72,7 +70,26 @@
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         
-        .paused { animation-play-state: paused; }
+        /* Prevent bounce on mobile (WeChat rubber band effect) */
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            -webkit-text-size-adjust: 100%;
+            touch-action: manipulation;
+            background-color: #000; /* Dark background for immersive mode */
+        }
+        
+        #root {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .glass-btn {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glass-btn:active { background: rgba(255, 255, 255, 0.3); transform: scale(0.95); }
     </style>
 <script type="importmap">
 {
@@ -87,7 +104,7 @@
 }
 </script>
 </head>
-<body class="bg-slate-50 text-slate-800 antialiased h-screen overflow-hidden">
-    <div id="root" class="h-full"></div>
+<body class="bg-black text-slate-800 antialiased h-full w-full">
+    <div id="root"></div>
 </body>
 </html>

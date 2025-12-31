@@ -1,7 +1,7 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Story, StoryNode } from '../types';
-import { AudioVisualizer } from './AudioVisualizer';
 import { playTextToSpeech, stopAudio, generateSceneImage, analyzeChildInput, constructNodeSpeech, matchIntentLocally, QuotaExhaustedError, AVAILABLE_TTS_MODELS, prefetchAudio } from '../services/geminiService';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 
@@ -16,159 +16,177 @@ interface StoryPlayerProps {
 type InteractionState = 'reading' | 'waiting' | 'listening' | 'processing' | 'guiding';
 
 export const StoryPlayer: React.FC<StoryPlayerProps> = ({ story, onExit, onComplete, onChoiceMade, onStoryUpdate }) => {
+    
     const [currentNodeId, setCurrentNodeId] = useState('start');
     const [interactionState, setInteractionState] = useState<InteractionState>('reading');
-    const [feedbackText, setFeedbackText] = useState("正在读故事...");
+    const [feedbackText, setFeedbackText] = useState("");
     
-    // Check if current node image is cached, otherwise use cover temporarily
+    // Navigation History for "Back" functionality
+    const [history, setHistory] = useState<string[]>([]);
+
+    // Images
     const [currentImage, setCurrentImage] = useState<string>(story.cover);
+    const [bgImageLayer1, setBgImageLayer1] = useState<string>(story.cover);
+    const [bgImageLayer2, setBgImageLayer2] = useState<string>('');
+    const [activeBgLayer, setActiveBgLayer] = useState<1 | 2>(1);
+
+    // Controls visibility
+    const [userInteracted, setUserInteracted] = useState(false);
+    const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
-    // Model Switching State
+    // Model Switching
     const [currentTtsModel, setCurrentTtsModel] = useState<string>(story.ttsModel || 'gemini-2.5-flash-preview-tts');
     const [showModelSwitcher, setShowModelSwitcher] = useState(false);
     const [isRetrying, setIsRetrying] = useState(false);
 
-    // Ref to track current node ID for async operations (race condition prevention)
+    // Refs
     const currentNodeIdRef = useRef(currentNodeId);
-    // Ref to track interaction state to prevent stale closures in callbacks
     const interactionStateRef = useRef(interactionState);
-    
-    // NEW: Track ALL recognized speech for the CURRENT node context
     const speechHistoryRef = useRef<string[]>([]);
+    const retryCountRef = useRef(0); 
+    const containerRef = useRef<HTMLDivElement>(null);
 
-    // Update refs when state changes
+    // Ensure node exists
+    const currentNode = story.nodes[currentNodeId];
+
+    // --- Interaction Timer (Auto-hide controls) ---
+    const resetInteractionTimer = useCallback(() => {
+        setUserInteracted(true);
+        if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+        controlsTimeoutRef.current = setTimeout(() => {
+            setUserInteracted(false);
+        }, 4000);
+    }, []);
+
+    useEffect(() => {
+        const handleActivity = () => resetInteractionTimer();
+        window.addEventListener('touchstart', handleActivity);
+        window.addEventListener('click', handleActivity);
+        resetInteractionTimer(); // Init
+        return () => {
+            window.removeEventListener('touchstart', handleActivity);
+            window.removeEventListener('click', handleActivity);
+            if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+        };
+    }, [resetInteractionTimer]);
+
+
     useEffect(() => {
         currentNodeIdRef.current = currentNodeId;
-        // Reset speech history buffer when node changes
         speechHistoryRef.current = []; 
+        retryCountRef.current = 0; 
     }, [currentNodeId]);
 
     useEffect(() => {
         interactionStateRef.current = interactionState;
     }, [interactionState]);
 
-    // Ensure node exists
-    const currentNode = story.nodes[currentNodeId];
-
-    // Helper to safely change node and cancel pending stuff
+    // --- Helper: Safe State Transitions ---
     const safeSetNode = (nextId: string) => {
+        if (!story.nodes[nextId]) {
+            console.warn(`Target node ${nextId} missing, ending story.`);
+            onComplete();
+            return;
+        }
+        setHistory(prev => [...prev, currentNodeId]); // Add current to history before moving
         setCurrentNodeId(nextId);
-        // Reset state immediately
         setInteractionState('reading');
     };
 
+    const handleBack = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (history.length === 0) return;
+        
+        const prevId = history[history.length - 1];
+        setHistory(prev => prev.slice(0, -1));
+        setCurrentNodeId(prevId);
+        setInteractionState('reading');
+        stopAudio();
+        abortListening();
+    };
+
     const handleChoice = (index: number, explicitTranscript?: string) => {
-        // Guard: Use the ref to ensure we are operating on the right node if called async
         const currentRefNode = story.nodes[currentNodeIdRef.current];
         if (!currentRefNode?.options) return;
         
         const choice = currentRefNode.options[index];
         if (!choice) return;
 
-        // Pass both the specific triggering transcript AND the full history
-        onChoiceMade(
-            choice.label, 
-            choice.type, 
-            currentNodeIdRef.current, 
-            explicitTranscript, 
-            [...speechHistoryRef.current] // Pass a copy of the full history
-        );
+        // Feedback Audio before transition
+        setFeedbackText(`"${choice.label}"`);
+        setInteractionState('guiding');
         
-        if (story.nodes[choice.next]) {
-            safeSetNode(choice.next);
-        } else {
-            console.warn(`Target node ${choice.next} does not exist. Ending story.`);
-            onComplete();
-        }
+        playTextToSpeech({
+            text: `好的！${choice.text || choice.label}`,
+            voiceName: story.voice,
+            model: currentTtsModel,
+            onEnd: () => {
+                 onChoiceMade(
+                    choice.label, 
+                    choice.type, 
+                    currentNodeIdRef.current, 
+                    explicitTranscript, 
+                    [...speechHistoryRef.current]
+                );
+                safeSetNode(choice.next);
+            }
+        });
     };
 
-    // --- Speech Recognition Handler ---
+    const speakSystemPrompt = (text: string, onComplete: () => void) => {
+        setFeedbackText(text);
+        playTextToSpeech({
+            text,
+            voiceName: story.voice,
+            model: currentTtsModel,
+            onEnd: onComplete
+        });
+    };
+
+    // --- Speech Recognition Logic ---
     const handleSpeechResult = useCallback((text: string) => {
-        // Only update feedback if we have text, otherwise keep "Listening..."
-        if (text) setFeedbackText(text);
+        if (text) setFeedbackText(`"${text}"`);
     }, []);
 
-    // Use the Web Speech API hook
     const startListeningRef = useRef<() => void>(() => {});
 
     const handleSpeechEnd = useCallback(async (finalText: string) => {
         const activeNodeId = currentNodeIdRef.current;
         const activeNode = story.nodes[activeNodeId];
-        const currentInteractionState = interactionStateRef.current;
 
-        // Guard: If we moved to another node while listening/processing, ignore
         if (!activeNode?.options || activeNode.type === 'linear') return;
 
-        // 1. Clean Text
         const cleanText = finalText ? finalText.trim() : '';
 
-        // Helper to restart listening smoothly
-        const restartListening = (msg: string) => {
-            if (currentInteractionState === 'listening') {
-                setFeedbackText(msg);
-                setTimeout(() => {
-                    if (interactionStateRef.current === 'listening') {
-                        startListeningRef.current(); 
-                    }
-                }, 800);
-            }
-        };
-
-        // 2. Empty Input Check
         if (!cleanText) {
-            // If no text captured (timeout or error) AND we are still in listening mode
-            restartListening("没听清，再试一次...");
+            if (retryCountRef.current < 2) {
+                setInteractionState('guiding');
+                retryCountRef.current += 1;
+                speakSystemPrompt("还在吗？请告诉我你想选哪一个。", () => {
+                     if (currentNodeIdRef.current === activeNodeId) {
+                         setInteractionState('listening');
+                         startListeningRef.current();
+                     }
+                });
+            } else {
+                setInteractionState('waiting');
+                setFeedbackText("请直接点击选项哦");
+            }
             return;
         }
 
-        // --- FILTER LOGIC START ---
-        
-        // 3. Local Match Check (Highest Priority)
-        // If it matches a keyword, we accept it regardless of length (e.g., "A", "是")
-        const localMatchIndex = matchIntentLocally(cleanText, activeNode.options);
-        const isLocalMatch = localMatchIndex !== null;
-
-        // 4. Length/Noise Check
-        // If it's NOT a direct local match, enforce stricter rules to avoid uploading noise
-        if (!isLocalMatch) {
-            // Remove punctuation for length check
-            const textOnly = cleanText.replace(/[.,!?;:。，！？]/g, '');
-            
-            // Criteria: Must be at least 2 chars (e.g. "我想去") OR strictly alphabet (e.g. "A" if missed by local match)
-            // This filters out single Chinese char noise like "啊", "额", "嗯"
-            const isTooShort = textOnly.length < 2 && !/^[a-zA-Z]+$/.test(textOnly);
-            
-            if (isTooShort) {
-                console.log("Input filtered (too short/noise):", cleanText);
-                restartListening("请说得完整一点...");
-                return;
-            }
-        }
-
-        // --- FILTER LOGIC END ---
-
-        // Valid input accepted
-        // --- Append to history ---
         speechHistoryRef.current.push(cleanText);
-
         setInteractionState('processing');
         setFeedbackText("正在思考...");
 
-        // --- HYBRID STRATEGY: STEP 1 - LOCAL MATCH (FAST) ---
-        if (isLocalMatch && localMatchIndex !== null) {
-            const choice = activeNode.options![localMatchIndex];
-            setFeedbackText(`听到了！选 ${choice.label}`);
-            
-            // Short delay for user to see feedback
-            setTimeout(() => {
-                if (currentNodeIdRef.current === activeNodeId) {
-                    handleChoice(localMatchIndex, cleanText);
-                }
-            }, 600);
+        const localMatchIndex = matchIntentLocally(cleanText, activeNode.options);
+        if (localMatchIndex !== null) {
+            if (currentNodeIdRef.current === activeNodeId) {
+                handleChoice(localMatchIndex, cleanText);
+            }
             return;
         }
 
-        // --- HYBRID STRATEGY: STEP 2 - API FALLBACK (SLOW) ---
         try {
             const result = await analyzeChildInput(
                 activeNode.text + " " + (activeNode.question || ""),
@@ -176,129 +194,97 @@ export const StoryPlayer: React.FC<StoryPlayerProps> = ({ story, onExit, onCompl
                 cleanText
             );
 
-            // Check if user navigated away while we were awaiting
             if (currentNodeIdRef.current !== activeNodeId) return;
 
             if (result.action === 'SELECT_OPTION' && result.selectedOptionIndex !== undefined) {
-                 const choice = activeNode.options![result.selectedOptionIndex];
-                 if (choice) {
-                     setFeedbackText(`听到了！选 ${choice.label}`);
-                     setTimeout(() => {
-                        if (currentNodeIdRef.current === activeNodeId) {
-                            handleChoice(result.selectedOptionIndex!, cleanText);
-                        }
-                     }, 800);
-                     return;
-                 }
+                 handleChoice(result.selectedOptionIndex!, cleanText);
+                 return;
             } 
             
-            // Fallback: Guide user
             setInteractionState('guiding');
-            setFeedbackText("AI正在回应...");
+            retryCountRef.current += 1;
             
-            const reply = result.replyText || "你是想选哪个呢？";
-            playTextToSpeech({
-                text: reply, 
-                voiceName: story.voice,
-                model: currentTtsModel,
-                onEnd: () => {
-                    if (currentNodeIdRef.current === activeNodeId) {
-                        // Automatically restart listening after guiding, IF we are still here
-                        setInteractionState('listening'); // Reset state to ensure loop continues
-                        startListeningRef.current(); 
-                        setFeedbackText("请再说一次...");
-                    }
+            const reply = result.replyText || "你是想选哪个呢？可以再说一次吗？";
+            speakSystemPrompt(reply, () => {
+                if (currentNodeIdRef.current === activeNodeId) {
+                    setInteractionState('listening'); 
+                    startListeningRef.current(); 
+                    setFeedbackText("请再说一次...");
                 }
             });
 
         } catch (e) {
             console.error("Analysis failed", e);
-            if (currentNodeIdRef.current === activeNodeId) {
-                setFeedbackText("网络有点卡，请直接点击选项吧");
-                setInteractionState('reading');
-            }
+            setFeedbackText("网络有点卡，请直接点击选项吧");
+            setInteractionState('reading');
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [story.nodes, story.voice, currentTtsModel]); // Depend on stable things
+    }, [story.nodes, story.voice, currentTtsModel]); 
 
-    const { isListening, transcript, startListening, stopListening, abortListening } = useSpeechRecognition({
+    const { isListening, isSupported: isMicSupported, startListening, stopListening, abortListening } = useSpeechRecognition({
         onResult: handleSpeechResult,
         onEnd: handleSpeechEnd,
-        // Increased from 1500 to 3000 to allow children more time to pause/think without cutting off
-        silenceDuration: 3000 
+        silenceDuration: 2500 
     });
 
-    // Update the ref so handleSpeechEnd can call it
     useEffect(() => {
         startListeningRef.current = startListening;
     }, [startListening]);
     
-    // --- Image & Audio Generation Effect ---
+    // --- Asset Management ---
     useEffect(() => {
         if (!currentNode) return;
         
         let isMounted = true;
-        
-        // Use a stable key for caching: storyId + nodeId
         const cacheKey = `${story.id}_${currentNode.id}`;
+
+        const updateBg = (newImg: string) => {
+            setCurrentImage(prev => {
+                if (prev === newImg) return prev;
+                if (activeBgLayer === 1) {
+                    setBgImageLayer2(newImg);
+                    setActiveBgLayer(2);
+                } else {
+                    setBgImageLayer1(newImg);
+                    setActiveBgLayer(1);
+                }
+                return newImg;
+            });
+        };
 
         if (currentNode.imagePrompt) {
             generateSceneImage(currentNode.imagePrompt, cacheKey).then(img => {
                 if (!isMounted) return;
-                
                 if (img) {
-                    setCurrentImage(img);
-                    
-                    // CRITICAL: If this is the start node and we just got an image, 
-                    // and the current story cover is still the placeholder, update it!
-                    if (currentNode.id === 'start' && onStoryUpdate) {
-                        // Check if cover is the default picsum one (approximate check) or different from new img
-                        if (story.cover !== img) {
-                            const updatedStory = { ...story, cover: img };
-                            onStoryUpdate(updatedStory);
-                        }
+                    updateBg(img);
+                    if (currentNode.id === 'start' && onStoryUpdate && story.cover !== img) {
+                        onStoryUpdate({ ...story, cover: img });
                     }
                 }
             });
         }
         
-        // FIXED: Force prefetch current node audio immediately to trigger DB->Memory decode
-        // This ensures audio is ready by the time the visual effect finishes or image loads
         const currentSpeech = constructNodeSpeech(currentNode);
         prefetchAudio(currentSpeech, story.voice, currentTtsModel);
 
-        // OPTIMIZATION: Prefetch images AND AUDIO for connected nodes
-        // We delay this slightly (3s) to prioritize the current node's TTS/Image loading first
         const prefetchTimer = setTimeout(() => {
             if (isMounted) {
-                // Handle linear flow
+                const nodesToPrefetch = [];
                 if (currentNode.type === 'linear' && currentNode.next) {
-                    const nextNode = story.nodes[currentNode.next];
-                    if (nextNode) {
-                        const nextText = constructNodeSpeech(nextNode);
-                        prefetchAudio(nextText, story.voice, currentTtsModel);
-                        if (nextNode.imagePrompt) {
-                             const nextKey = `${story.id}_${nextNode.id}`;
-                             generateSceneImage(nextNode.imagePrompt, nextKey).catch(() => {});
+                    nodesToPrefetch.push(story.nodes[currentNode.next]);
+                } else if (currentNode.type === 'choice' && currentNode.options) {
+                    currentNode.options.forEach(opt => nodesToPrefetch.push(story.nodes[opt.next]));
+                }
+                nodesToPrefetch.forEach(node => {
+                    if (node) {
+                        prefetchAudio(constructNodeSpeech(node), story.voice, currentTtsModel);
+                        if (node.imagePrompt) {
+                            generateSceneImage(node.imagePrompt, `${story.id}_${node.id}`).catch(()=>{});
                         }
                     }
-                }
-                // Handle choice flow
-                else if (currentNode.type === 'choice' && currentNode.options) {
-                    currentNode.options.forEach(opt => {
-                         const nextNode = story.nodes[opt.next];
-                         if (nextNode) {
-                             if (nextNode.imagePrompt) {
-                                 const nextKey = `${story.id}_${nextNode.id}`;
-                                 generateSceneImage(nextNode.imagePrompt, nextKey).catch(() => {});
-                             }
-                             const nextText = constructNodeSpeech(nextNode);
-                             prefetchAudio(nextText, story.voice, currentTtsModel);
-                         }
-                    });
-                }
+                });
             }
-        }, 3000);
+        }, 1500); 
 
         return () => { 
             isMounted = false; 
@@ -306,332 +292,270 @@ export const StoryPlayer: React.FC<StoryPlayerProps> = ({ story, onExit, onCompl
         };
     }, [currentNodeId, currentNode, story.id, story.voice, currentTtsModel]); 
 
-    // --- TTS Playback Logic ---
+    // --- Main Story Flow ---
     const speakCurrentNode = useCallback(() => {
         if (!currentNode) return;
 
-        // Reset State for New Node
         setInteractionState('reading');
         abortListening(); 
         stopAudio();
-        setFeedbackText("正在讲故事...");
-
+        
         const textToRead = constructNodeSpeech(currentNode);
+        setFeedbackText(""); 
 
         playTextToSpeech({
             text: textToRead, 
             voiceName: story.voice, 
             model: currentTtsModel,
-            // Trigger this when audio definitely finishes
             onEnd: () => {
-                if (currentNodeIdRef.current !== currentNode.id) return; // Guard
+                if (currentNodeIdRef.current !== currentNode.id) return; 
 
                 if (currentNode.type === 'end') {
-                    setFeedbackText("故事结束啦");
-                    setTimeout(() => {
-                        onComplete();
-                    }, 3000); 
+                    setFeedbackText("✨ 故事结束 ✨");
+                    setTimeout(onComplete, 4000); 
                 } 
                 else if (currentNode.type === 'linear') {
-                    // AUTO-ADVANCE LOGIC
-                    setFeedbackText("继续讲下去...");
-                    setInteractionState('waiting');
                     if (currentNode.next && story.nodes[currentNode.next]) {
                          setTimeout(() => {
                              if (currentNodeIdRef.current === currentNode.id) {
                                  safeSetNode(currentNode.next!);
                              }
-                         }, 1200); // 1.2s gap for linear nodes
+                         }, 800); 
                     } else {
-                        // Fallback if linear node has no next (should be 'end' type, but just in case)
-                         setTimeout(() => {
-                             onComplete();
-                         }, 3000);
+                         setTimeout(onComplete, 3000);
                     }
                 }
                 else if (currentNode.type === 'choice') {
-                    // Turn-Taking Gap: Wait before opening mic to avoid cutting off prompt
-                    setInteractionState('waiting');
-                    setFeedbackText("说完后再听你说...");
-                    
-                    setTimeout(() => {
-                         if (currentNodeIdRef.current !== currentNode.id) return;
+                    if (isMicSupported) {
                          setInteractionState('listening');
-                         startListening();
-                         setFeedbackText("请告诉我你的决定...");
-                    }, 600); // 600ms gap
+                         // setFeedbackText("请做出选择...");
+                         setTimeout(() => {
+                             if (currentNodeIdRef.current === currentNode.id) {
+                                 startListening();
+                             }
+                         }, 100);
+                    } else {
+                        setInteractionState('waiting');
+                        setFeedbackText("请点击屏幕选项");
+                    }
                 }
             },
             onError: (error) => {
-                if (error instanceof QuotaExhaustedError || error.message === 'API_QUOTA_EXHAUSTED' || error.message?.includes('429')) {
+                if (error instanceof QuotaExhaustedError) {
                     setShowModelSwitcher(true);
-                    return true; // Stop default fallback behavior
+                    return true;
                 }
-                return false; // Allow fallback for other errors
+                return false;
             }
         });
-    }, [currentNode, story.voice, currentTtsModel, startListening, onComplete, abortListening]);
+    }, [currentNode, story.voice, currentTtsModel, startListening, onComplete, abortListening, isMicSupported]);
 
-    // --- Main Story Flow Effect ---
     useEffect(() => {
         if (!currentNode) {
-            console.error("Node not found:", currentNodeId);
-            setFeedbackText("故事遇到了一点小问题...");
             setTimeout(onExit, 2000);
             return;
         }
-        
         speakCurrentNode();
-
         return () => {
             stopAudio();
             abortListening();
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [currentNodeId, currentTtsModel]); // Trigger re-read if model changes (retry)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentNodeId, currentTtsModel]); 
 
-    // Retry handler for Model Switcher
+    const handleReplay = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        speakCurrentNode();
+    };
+
     const handleModelSwitch = (newModelId: string) => {
         setCurrentTtsModel(newModelId);
         setShowModelSwitcher(false);
         setIsRetrying(true);
-        // The useEffect will trigger re-read because currentTtsModel changed
         setTimeout(() => setIsRetrying(false), 500);
     };
 
-    // Manual manual interaction handling
-    const onMicClick = () => {
-        if (interactionState === 'listening') {
-            if (transcript && transcript.trim().length > 0) {
-                stopListening(); 
-            } else {
-                abortListening(); 
-                setInteractionState('reading'); 
-                setFeedbackText("已暂停，点击继续");
-            }
-        } else if (interactionState === 'processing') {
-            abortListening();
-            setInteractionState('reading');
-            setFeedbackText("已取消，请点击选项");
-        } else if (interactionState === 'waiting') {
-             // User impatient? Let them skip gap
-             setInteractionState('listening');
-             startListening();
-             setFeedbackText("我在听...");
-        } else {
-            setInteractionState('listening');
-            startListening();
-            setFeedbackText("我在听...");
-        }
-    };
+    if (!currentNode) return null;
 
-    if (!currentNode) {
-        return (
-            <div className="flex items-center justify-center h-full bg-[#fff1f2] flex-col gap-4">
-                <span className="material-symbols-outlined text-4xl text-slate-400">broken_image</span>
-                <p className="text-slate-500 font-bold">剧情加载中断</p>
-                <button onClick={onExit} className="px-6 py-2 bg-white rounded-full shadow text-brand-600 font-bold">返回</button>
-            </div>
-        );
-    }
+    // --- UI RENDER ---
+    const showChoices = currentNode.type === 'choice' && currentNode.options;
+    const isInteractive = ['listening', 'waiting', 'guiding', 'processing'].includes(interactionState);
+    const showBubbles = ['listening', 'waiting', 'guiding'].includes(interactionState);
 
-    const getStatusColor = () => {
-        switch(interactionState) {
-            case 'listening': 
-                return isListening
-                    ? 'text-green-600 bg-green-50 border-green-200 ring-2 ring-green-100 shadow-md' 
-                    : 'text-orange-600 bg-orange-50 border-orange-200';
-            case 'waiting': return 'text-slate-500 bg-slate-50 border-slate-200 cursor-wait';
-            case 'processing': return 'text-brand-600 bg-brand-50 border-brand-200 animate-pulse';
-            case 'guiding': return 'text-purple-600 bg-purple-50 border-purple-200';
-            default: return 'text-slate-500 bg-slate-100 border-slate-200 hover:bg-white';
-        }
-    };
-
-    const getStatusIcon = () => {
-        switch(interactionState) {
-            case 'listening': return isListening ? 'mic' : 'mic_none';
-            case 'waiting': return 'hourglass_empty';
-            case 'processing': return 'hourglass_top';
-            case 'guiding': return 'record_voice_over';
-            default: return 'mic_none'; 
-        }
-    };
-
-    const getStatusLabel = () => {
-         if (interactionState === 'processing') return '思考中 (点击取消)';
-         if (interactionState === 'waiting') return '请稍等...';
-         if (interactionState === 'listening' && !isListening) return '准备中...';
-         if (interactionState === 'listening' && isListening) return transcript || "我在听...";
-         return feedbackText;
-    };
-
-    return (
-        <section className="absolute inset-0 bg-[#fff1f2] overflow-hidden">
-            {/* Background Layer */}
-            <div className="absolute inset-0 z-0">
-                <img 
-                    src={currentImage} 
-                    alt="Background" 
-                    className="w-full h-full object-cover opacity-30 transition-all duration-1000 transform scale-105 blur-sm" 
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#fff1f2] via-transparent to-transparent"></div>
-            </div>
-
-            {/* Scrollable Container */}
-            <div className="absolute inset-0 z-10 overflow-y-auto overflow-x-hidden custom-scrollbar">
-                <div className="w-full min-h-full max-w-4xl mx-auto px-6 py-10 flex flex-col items-center justify-between">
-                    
-                    {/* Visualizer / Character */}
-                    <div className="flex-1 flex items-center justify-center w-full relative min-h-[300px] my-6">
-                        <div className="relative w-64 h-64 md:w-80 md:h-80 group">
-                            
-                            {/* Listening Animation */}
-                            {interactionState === 'listening' && isListening && (
-                                <>
-                                    <div className="absolute inset-0 rounded-full border-4 border-green-400 opacity-60 animate-ping"></div>
-                                    <div className="absolute inset-0 rounded-full border-2 border-green-300 opacity-40 animate-pulse scale-110"></div>
-                                </>
-                            )}
-
-                            {interactionState === 'processing' && (
-                                <div className="absolute inset-0 rounded-full border-4 border-brand-400 animate-spin border-t-transparent"></div>
-                            )}
-
-                            {interactionState === 'waiting' && (
-                                <div className="absolute inset-0 rounded-full border-4 border-slate-200 animate-pulse"></div>
-                            )}
-                            
-                            <img 
-                                src={currentImage}
-                                alt="Scene" 
-                                className="w-full h-full object-cover rounded-full border-8 border-white shadow-2xl relative z-10 transition-all duration-500" 
-                            />
-                            
-                            {(interactionState === 'reading' || interactionState === 'guiding') && (
-                                <div className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 bg-white px-5 py-2 rounded-full shadow-lg flex gap-1.5 items-center whitespace-nowrap">
-                                    <AudioVisualizer isActive={true} />
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Text & Interactions */}
-                    <div className="w-full flex flex-col items-center pb-8">
-                        {/* Display Narrative TEXT */}
-                        <div className="bg-white/90 backdrop-blur-sm p-6 rounded-3xl shadow-lg border border-white mb-8 max-w-3xl mx-4 text-center">
-                            <p className="text-xl md:text-2xl text-slate-800 leading-relaxed mb-4">
-                                {currentNode.text}
-                            </p>
-                            {currentNode.type === 'choice' && currentNode.question && (
-                                <p className="text-lg md:text-xl font-bold text-brand-600">
-                                    {currentNode.question}
-                                </p>
-                            )}
-                        </div>
-
-                        {/* Interaction Status Bar */}
-                        <button 
-                            onClick={onMicClick}
-                            disabled={interactionState === 'waiting' || currentNode.type === 'linear'}
-                            className={`flex items-center gap-2 mb-8 px-5 py-2.5 rounded-full text-sm md:text-base font-bold shadow-sm transition-all duration-300 border active:scale-95 ${getStatusColor()} ${interactionState === 'waiting' || currentNode.type === 'linear' ? 'opacity-80' : ''}`}
+    return createPortal(
+        <section ref={containerRef} className="fixed inset-0 bg-black overflow-hidden font-sans select-none z-[100] text-white">
+            
+            {/* 1. Cinematic Background (Ken Burns) */}
+            <div className="absolute inset-0 z-0 bg-black">
+                {[bgImageLayer1, bgImageLayer2].map((img, idx) => {
+                    const isActive = (idx === 0 && activeBgLayer === 1) || (idx === 1 && activeBgLayer === 2);
+                    return (
+                        <div 
+                            key={idx}
+                            className={`absolute inset-0 bg-cover bg-center transition-opacity duration-[1500ms] ease-in-out ${isActive ? 'opacity-100' : 'opacity-0'}`}
+                            style={{ backgroundImage: `url(${img})` }}
                         >
-                            {currentNode.type === 'linear' ? (
-                                <>
-                                    <div className="w-6 h-6 rounded-full flex items-center justify-center bg-slate-100">
-                                        <span className="material-symbols-outlined text-lg text-slate-400">hourglass_bottom</span>
-                                    </div>
-                                    <span>自动播放中...</span>
-                                </>
-                            ) : (
-                                <>
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center ${interactionState === 'listening' && isListening ? 'animate-pulse' : ''}`}>
-                                        <span className="material-symbols-outlined text-lg">{getStatusIcon()}</span>
-                                    </div>
-                                    <span className="truncate max-w-[240px] md:max-w-none">{getStatusLabel()}</span>
-                                </>
-                            )}
-                        </button>
+                             <div className={`absolute inset-0 bg-inherit bg-cover bg-center ${isActive ? 'animate-ken-burns' : ''}`}></div>
+                        </div>
+                    );
+                })}
+                {/* Cinematic Vignette - Darker at bottom for text readability */}
+                <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent via-50% to-black/90 pointer-events-none"></div>
+            </div>
 
-                        {/* Choices - ONLY Show if type is 'choice' */}
-                        {currentNode.type === 'choice' && currentNode.options && (
-                            <div className={`flex flex-col md:flex-row gap-6 w-full px-4 transition-opacity duration-500 ${interactionState === 'reading' || interactionState === 'waiting' ? 'opacity-50 hover:opacity-100' : 'opacity-100'}`}>
-                                {currentNode.options.map((opt, idx) => (
-                                    <button 
-                                        key={idx}
-                                        onClick={() => handleChoice(idx)}
-                                        className="flex-1 bg-white hover:bg-brand-50 border-2 border-brand-200 hover:border-brand-500 p-6 rounded-3xl shadow-lg hover:shadow-xl transition-all group text-left relative overflow-hidden transform hover:-translate-y-1 active:scale-95"
-                                    >
-                                        <span className="block text-brand-600 font-bold text-2xl mb-1 text-center">{opt.label}</span>
-                                        {opt.label !== opt.text && (
-                                            <span className="text-slate-400 text-xs font-bold block text-center line-clamp-1">"{opt.text}"</span>
-                                        )}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+            {/* 2. Top Controls (Auto-hide) */}
+            <div className={`absolute top-0 left-0 right-0 z-50 p-6 flex justify-between items-start transition-all duration-500 ${userInteracted || showChoices ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}>
+                <button 
+                    onClick={(e) => { e.stopPropagation(); stopAudio(); abortListening(); onExit(); }} 
+                    className="glass-btn w-10 h-10 rounded-full flex items-center justify-center hover:bg-white/20 transition-all backdrop-blur-md active:scale-90"
+                    title="退出故事"
+                >
+                    <span className="material-symbols-outlined text-xl">close</span>
+                </button>
+                
+                <div className="flex gap-3">
+                     <button 
+                         onClick={handleReplay}
+                         className={`glass-btn w-10 h-10 rounded-full flex items-center justify-center transition-all backdrop-blur-md active:scale-90 ${interactionState === 'reading' ? 'bg-white/20 text-white' : 'text-white/70'}`}
+                         title="重播本页"
+                     >
+                        <span className="material-symbols-outlined text-xl">replay</span>
+                     </button>
                 </div>
             </div>
 
-            <button 
-                className="absolute top-6 right-6 p-3 bg-white/60 hover:bg-white rounded-full text-slate-500 hover:text-slate-800 transition-all z-20 backdrop-blur shadow-sm" 
-                onClick={() => { stopAudio(); abortListening(); onExit(); }}
-            >
-                <span className="material-symbols-outlined text-2xl">close</span>
-            </button>
+            {/* 3. Immersive Listening Stage */}
+            <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center transition-all duration-700 ${isInteractive ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                {/* ... Magic Orb and Feedback ... */}
+                <div className="relative mb-6">
+                    <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 ${interactionState === 'listening' ? 'w-80 h-80 animate-[ping_3s_infinite] opacity-30' : 'w-0 h-0 opacity-0'}`}></div>
+                    <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500/20 blur-3xl ${interactionState === 'listening' ? 'w-64 h-64 animate-pulse' : 'w-0 h-0'}`}></div>
+                    
+                    <div 
+                        className={`relative w-28 h-28 rounded-full flex items-center justify-center transition-all duration-500 backdrop-blur-md border border-white/20 shadow-[0_0_40px_rgba(255,255,255,0.2)] 
+                        ${interactionState === 'listening' ? 'bg-gradient-to-b from-brand-400/30 to-brand-600/10 scale-110 shadow-[0_0_60px_rgba(14,165,233,0.6)] border-brand-300/50' : 'bg-gradient-to-b from-white/10 to-white/5 scale-100'}`}
+                        onClick={() => { if(interactionState === 'waiting') startListening(); }}
+                    >
+                         <span className={`material-symbols-outlined text-5xl drop-shadow-lg transition-colors ${interactionState === 'waiting' ? 'text-white/50' : 'text-white/80'} ${interactionState === 'processing' ? 'animate-spin' : ''}`}>
+                             {interactionState === 'processing' ? 'hourglass_top' : (interactionState === 'waiting' ? 'touch_app' : 'mic')}
+                         </span>
+                    </div>
 
-            {/* Model Switcher Dialog (PORTAL) */}
-            {showModelSwitcher && createPortal(
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden animate-scale-up shadow-2xl">
-                        <div className="bg-amber-50 p-6 text-center border-b border-amber-100">
-                            <span className="material-symbols-outlined text-4xl text-amber-500 mb-2">speed</span>
-                            <h3 className="text-xl font-bold text-slate-800">模型响应繁忙</h3>
-                            <p className="text-sm text-slate-500 mt-1">当前语音模型额度已用完，请切换其他模型继续收听。</p>
+                    {feedbackText && (
+                        <div className="absolute top-36 left-1/2 -translate-x-1/2 w-[280px] text-center z-50">
+                            <span className="inline-block px-4 py-2 rounded-2xl bg-black/60 backdrop-blur-md border border-white/10 text-white/90 text-sm font-bold shadow-lg animate-fade-in-up whitespace-nowrap overflow-hidden text-ellipsis max-w-full">
+                                {feedbackText}
+                            </span>
                         </div>
-                        <div className="p-4 space-y-2 max-h-[300px] overflow-y-auto">
-                            {AVAILABLE_TTS_MODELS.map(model => (
-                                <button
-                                    key={model.id}
-                                    onClick={() => handleModelSwitch(model.id)}
-                                    className={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all ${
-                                        currentTtsModel === model.id 
-                                            ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-200' 
-                                            : 'bg-white border-slate-200 hover:border-brand-300 hover:bg-slate-50'
-                                    }`}
-                                >
-                                    <div>
-                                        <div className="font-bold text-sm text-slate-800">{model.name}</div>
-                                        <div className="text-[10px] text-slate-400">{model.desc}</div>
-                                    </div>
-                                    {currentTtsModel === model.id && (
-                                        <span className="material-symbols-outlined text-amber-500">check_circle</span>
-                                    )}
-                                </button>
-                            ))}
+                    )}
+                </div>
+
+                {/* Choice Suggestions */}
+                {showChoices && (
+                    <div className={`mt-12 w-full max-w-lg px-6 flex flex-wrap items-center justify-center gap-3 transition-all duration-500 ${showBubbles ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-8 pointer-events-none'}`}>
+                        <div className="w-full text-center mb-1">
+                             <span className="text-[10px] text-white/40 font-bold uppercase tracking-widest">您可以说...</span>
                         </div>
-                        <div className="p-4 bg-slate-50 border-t border-slate-100">
-                            <button 
-                                onClick={() => setShowModelSwitcher(false)}
-                                className="w-full py-3 text-slate-500 font-bold text-sm hover:text-slate-700"
+                        {currentNode.options!.map((opt, idx) => (
+                            <button
+                                key={idx}
+                                onClick={(e) => { e.stopPropagation(); handleChoice(idx); }}
+                                className="glass-btn relative flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-300 transform active:scale-95 hover:bg-white/20 border border-white/10"
+                                style={{ transitionDelay: `${idx * 50}ms` }}
                             >
-                                暂时不听了 (退出)
+                                <span className="text-sm font-medium text-white/90 drop-shadow-sm">{opt.label}</span>
                             </button>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* 4. Bottom Text Container */}
+            <div className={`absolute bottom-0 left-0 right-0 z-10 pb-safe flex flex-col items-center justify-end min-h-[30vh] transition-opacity duration-500 ${isInteractive ? 'opacity-40' : 'opacity-100'}`}>
+                 <div className="w-full bg-gradient-to-t from-black via-black/80 to-transparent pt-24 pb-8 px-8 md:px-16 text-center">
+                     <p className="text-xl md:text-3xl font-medium leading-relaxed tracking-wide text-white/95 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] font-sans">
+                         {currentNode.text}
+                     </p>
+                 </div>
+            </div>
+
+            {/* --- Explicit Side Navigation Buttons (Replaces Hidden Zones) --- */}
+            
+            {/* Previous Page Button (Left) */}
+            {history.length > 0 && (
+                <button 
+                    onClick={handleBack}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 z-40 w-12 h-12 rounded-full glass-btn flex items-center justify-center text-white hover:bg-white/20 transition-all active:scale-90 shadow-lg border border-white/20 backdrop-blur-md"
+                    title="上一页"
+                >
+                    <span className="material-symbols-outlined text-3xl">chevron_left</span>
+                </button>
+            )}
+
+            {/* Next Page Button (Right) - Only for linear pages */}
+            {currentNode.type === 'linear' && (
+                <button 
+                    onClick={(e) => { 
+                        e.stopPropagation(); 
+                        stopAudio(); 
+                        if(currentNode.next) safeSetNode(currentNode.next); 
+                        else onComplete(); 
+                    }}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 z-40 w-12 h-12 rounded-full glass-btn flex items-center justify-center text-white hover:bg-white/20 transition-all active:scale-90 shadow-lg border border-white/20 backdrop-blur-md animate-pulse-slow"
+                    title="下一页"
+                >
+                    <span className="material-symbols-outlined text-3xl">chevron_right</span>
+                </button>
+            )}
+
+            {/* Model Switcher Modal */}
+            {showModelSwitcher && createPortal(
+                <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+                    <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden p-6 text-center shadow-2xl animate-scale-up">
+                        <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <span className="material-symbols-outlined">cloud_sync</span>
+                        </div>
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">切换语音模型</h3>
+                        <p className="text-slate-500 text-sm mb-6">当前配额已耗尽，请选择备用方案</p>
+                        <div className="space-y-3">
+                        {AVAILABLE_TTS_MODELS.map(model => (
+                            <button key={model.id} onClick={() => handleModelSwitch(model.id)} className={`w-full p-4 rounded-xl border text-left text-sm font-bold flex items-center justify-between transition-all ${currentTtsModel === model.id ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}>
+                                <span>{model.name}</span>
+                                {currentTtsModel === model.id && <span className="material-symbols-outlined">check</span>}
+                            </button>
+                        ))}
                         </div>
                     </div>
                 </div>,
                 document.body
             )}
-
+            
+            {/* Loading Overlay */}
             {isRetrying && (
-                <div className="absolute inset-0 z-40 bg-white/50 backdrop-blur-sm flex items-center justify-center">
-                    <div className="bg-white px-6 py-3 rounded-full shadow-lg flex items-center gap-3">
-                        <span className="material-symbols-outlined animate-spin text-brand-500">sync</span>
-                        <span className="font-bold text-slate-600">正在切换并重试...</span>
-                    </div>
+                <div className="absolute inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center text-white gap-3">
+                    <span className="material-symbols-outlined animate-spin text-3xl">sync</span>
+                    <span className="font-bold tracking-widest">正在连接...</span>
                 </div>
             )}
-        </section>
+
+            <style>{`
+                @keyframes ken-burns {
+                    0% { transform: scale(1.0); }
+                    100% { transform: scale(1.15); }
+                }
+                .animate-ken-burns {
+                    animation: ken-burns 20s infinite alternate cubic-bezier(0.4, 0, 0.2, 1);
+                }
+                .p-safe {
+                    padding-top: env(safe-area-inset-top);
+                    padding-left: env(safe-area-inset-left);
+                    padding-right: env(safe-area-inset-right);
+                }
+                .pb-safe {
+                    padding-bottom: env(safe-area-inset-bottom);
+                }
+            `}</style>
+        </section>,
+        document.body
     );
 };

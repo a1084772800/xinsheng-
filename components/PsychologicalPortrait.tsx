@@ -1,1 +1,1 @@
-// This file is deprecated. Replaced by ChatDataDashboard.tsx
+// File deprecated. Replaced by ChatDataDashboard.tsx
