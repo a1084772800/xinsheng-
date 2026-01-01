@@ -31,8 +31,9 @@ interface ToastState {
     type: 'success' | 'warning' | 'error' | 'info';
 }
 
+// Explicitly require children
 interface ErrorBoundaryProps {
-    children?: ReactNode;
+    children?: ReactNode; // Made optional to avoid strict children check issues in some TS setups, though we pass it.
 }
 
 interface ErrorBoundaryState {
@@ -41,13 +42,19 @@ interface ErrorBoundaryState {
 }
 
 // --- ERROR BOUNDARY COMPONENT ---
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+    
+    // Explicitly declare state to satisfy TS
+    public state: ErrorBoundaryState = {
+        hasError: false,
+        error: null
+    };
+
+    // Explicitly declare props to fix TS error: Property 'props' does not exist on type 'ErrorBoundary'
+    public declare props: Readonly<ErrorBoundaryProps>;
+
     constructor(props: ErrorBoundaryProps) {
         super(props);
-        this.state = {
-            hasError: false,
-            error: null
-        };
     }
 
     static getDerivedStateFromError(error: Error): ErrorBoundaryState {

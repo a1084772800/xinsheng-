@@ -1,3 +1,4 @@
+
 export interface StoryOption {
     label: string;
     text: string; // What the character/child says
@@ -51,21 +52,7 @@ export interface UserChoice {
     speechHistory?: string[];
 }
 
-export interface UserStats {
-    [key: string]: number;
-}
-
-export interface ReportDimension {
-    subject: string;
-    score: number;
-}
-
-export interface ReportData {
-    dimensions: ReportDimension[];
-    keywords: string[];
-    summary: string;
-    highlightQuote?: string;
-    highlightAnalysis?: string;
-    traitAnalysis: string;
-    suggestion: string;
+export interface AppSettings {
+    apiKey?: string;
+    baseUrl?: string;
 }

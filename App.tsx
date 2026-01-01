@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { ParentDashboard } from './components/ParentDashboard';
 import { StoryPlayer } from './components/StoryPlayer';
@@ -7,40 +6,17 @@ import { backgroundCacheHighPriority } from './services/geminiService';
 import { storageService } from './services/storageService';
 import { Story, UserChoice } from './types';
 import { INITIAL_STORY } from './constants';
+import { SettingsModal } from './components/SettingsModal';
+import { errorBus } from './services/errorBus';
 
 const App: React.FC = () => {
-    // API Key State
-    const [isApiKeySet, setIsApiKeySet] = useState<boolean | null>(null);
-
     const [mode, setMode] = useState<'parent' | 'kid'>('parent');
     const [stories, setStories] = useState<Story[]>([INITIAL_STORY]);
     const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
     const [isPlaying, setIsPlaying] = useState(false); // Controls Player vs Library view in Kid mode
     const [choices, setChoices] = useState<UserChoice[]>([]);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     
-    // Feature 0: Check API Key (Environment Specific)
-    useEffect(() => {
-        const checkKey = async () => {
-            if ((window as any).aistudio && (window as any).aistudio.hasSelectedApiKey) {
-                const has = await (window as any).aistudio.hasSelectedApiKey();
-                setIsApiKeySet(has);
-            } else {
-                // If not in the specific aistudio environment, assume environment variables are handled differently
-                // or we are in local dev where process.env is set.
-                setIsApiKeySet(true);
-            }
-        };
-        checkKey();
-    }, []);
-
-    const handleSelectKey = async () => {
-        if ((window as any).aistudio?.openSelectKey) {
-            await (window as any).aistudio.openSelectKey();
-            // Race condition mitigation: Assume success immediately
-            setIsApiKeySet(true);
-        }
-    };
-
     // Feature 1: Pre-request Microphone Permission on Mount
     useEffect(() => {
         const requestMic = async () => {
@@ -90,6 +66,16 @@ const App: React.FC = () => {
         loadStoriesFromDB();
     }, []);
 
+    // Feature 3: Auto-open Settings on API Error
+    useEffect(() => {
+        const unsubscribe = errorBus.subscribe((error) => {
+            if (error.openSettings) {
+                setIsSettingsOpen(true);
+            }
+        });
+        return unsubscribe;
+    }, []);
+
     const handleStoryGenerated = (story: Story) => {
         setStories([story, ...stories]);
     };
@@ -133,41 +119,6 @@ const App: React.FC = () => {
 
     const currentStory = stories.find(s => s.id === currentStoryId);
 
-    // --- RENDER API KEY BLOCKING SCREEN ---
-    if (isApiKeySet === false) {
-        return (
-            <div className="fixed inset-0 z-[200] bg-slate-50 flex items-center justify-center p-4">
-                <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center border border-slate-100">
-                    <div className="w-16 h-16 bg-gradient-to-br from-brand-500 to-accent-500 rounded-2xl mx-auto flex items-center justify-center text-white shadow-lg mb-6">
-                        <span className="material-symbols-outlined text-3xl">key</span>
-                    </div>
-                    <h2 className="text-2xl font-bold text-slate-800 mb-2">需要配置 API Key</h2>
-                    <p className="text-slate-500 mb-8 leading-relaxed">
-                        心声故事需要使用 Gemini API 来生成精彩的互动剧情。请先连接您的 Google Cloud API Key。
-                    </p>
-                    
-                    <button 
-                        onClick={handleSelectKey}
-                        className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-lg hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 active:scale-[0.98] flex items-center justify-center gap-2"
-                    >
-                        <span className="material-symbols-outlined">link</span>
-                        连接 API Key
-                    </button>
-                    
-                    <div className="mt-6 text-xs text-slate-400">
-                        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="underline hover:text-slate-600">
-                            了解关于 Gemini API 的计费信息
-                        </a>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    if (isApiKeySet === null) {
-        return null; // Loading state
-    }
-
     // --- FIX: Use 100dvh for WeChat compatibility and add safe-area padding ---
     return (
         <div className="h-screen supports-[height:100dvh]:h-[100dvh] w-full flex flex-col bg-slate-50 overflow-hidden">
@@ -185,6 +136,15 @@ const App: React.FC = () => {
                             </div>
                         </div>
                         <div className="flex items-center gap-2 md:gap-4">
+                             {/* Settings Button (Hidden/Subtle for end users, visible for debugging) */}
+                             <button
+                                onClick={() => setIsSettingsOpen(true)}
+                                className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-all"
+                                title="设置"
+                            >
+                                <span className="material-symbols-outlined">settings</span>
+                            </button>
+
                             <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
                                 <button 
                                     className={`px-3 md:px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${mode === 'parent' ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
@@ -206,6 +166,9 @@ const App: React.FC = () => {
                     </div>
                 </div>
             </nav>
+
+            {/* Settings Modal - Still available if needed manually, but not forced */}
+            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
             {/* Main Content with Safe Area Bottom Padding */}
             <main className="flex-1 relative w-full pb-[env(safe-area-inset-bottom)]">

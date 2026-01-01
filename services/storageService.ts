@@ -1,5 +1,5 @@
 
-import { Story } from "../types";
+import { Story, AppSettings } from "../types";
 
 const DB_NAME = 'HeartVoiceStoriesDB';
 const DB_VERSION = 5; 
@@ -171,5 +171,29 @@ export const storageService = {
               request.onsuccess = () => resolve(request.result > 0);
               request.onerror = () => reject(request.error);
          });
+    },
+
+    // --- App Settings Operations ---
+
+    saveSettings: async (settings: AppSettings): Promise<void> => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_SETTINGS, 'readwrite');
+            const store = tx.objectStore(STORE_SETTINGS);
+            store.put(settings, 'config');
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    },
+
+    getSettings: async (): Promise<AppSettings | undefined> => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_SETTINGS, 'readonly');
+            const store = tx.objectStore(STORE_SETTINGS);
+            const request = store.get('config');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
     }
 };

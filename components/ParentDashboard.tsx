@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { generateStoryScript, cacheStoryAssets, initializeAudio, AVAILABLE_TTS_MODELS, AVAILABLE_GEN_MODELS } from '../services/geminiService';
 import { storageService } from '../services/storageService';
@@ -180,12 +179,13 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             showToast("故事骨架已生成，请在右侧预览并生成配图", "success");
         } catch (e: any) {
             console.error(e);
+            
             let msg = "生成故事失败，请重试。";
             let title = "生成失败";
             
             if (e.message && e.message.includes("API Key")) {
                 title = "配置错误";
-                msg = "API Key 未配置。请检查环境设置。";
+                msg = "API Key 未配置或无效。请检查设置。";
             } else if (e.message && e.message.includes("Quota")) {
                  title = "配额不足";
                  msg = "API 配额不足，请稍后再试。";

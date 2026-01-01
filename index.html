@@ -1,12 +1,142 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- Meta referrer is now managed dynamically by App.tsx based on settings -->
     <title>心声故事 Heart-Voice Stories</title>
     <!-- Simple Emoji Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+    
+    <!-- vConsole Debug Tool -->
+    <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+    <script>
+        // Initialize vConsole
+        var vConsole = new window.VConsole();
+        
+        // --- ADVANCED NETWORK TRACING INTERCEPTOR (V3 - Robust Encoding & Safety) ---
+        (function() {
+            const originalFetch = window.fetch;
+            const textDecoder = new TextDecoder("utf-8"); // Force UTF-8
+
+            const getHeaders = (resource, config) => {
+                let headers = new Headers();
+                if (resource instanceof Request) {
+                    resource.headers.forEach((v, k) => headers.append(k, v));
+                }
+                if (config && config.headers) {
+                    if (config.headers instanceof Headers) {
+                        config.headers.forEach((v, k) => headers.append(k, v));
+                    } else if (Array.isArray(config.headers)) {
+                        config.headers.forEach(([k, v]) => headers.append(k, v));
+                    } else {
+                        Object.entries(config.headers).forEach(([k, v]) => headers.append(k, v));
+                    }
+                }
+                return headers;
+            };
+
+            const checkInvisibleChars = (str) => {
+                if (!str) return false;
+                return /[\u200B-\u200D\uFEFF\u00A0\u2060\r\n]/.test(str);
+            };
+
+            // Safe body reader that avoids "Operation aborted" in buggy WebViews
+            const safeReadBody = async (cloneable) => {
+                try {
+                    // CRITICAL FIX: Wrapping clone() in try-catch.
+                    // Some browsers (WeChat WebView) throw "DOMException: The operation was aborted"
+                    // immediately upon calling clone() if the stream state is specific.
+                    const clone = cloneable.clone();
+                    const buffer = await clone.arrayBuffer();
+                    return textDecoder.decode(buffer);
+                } catch (e) {
+                    return `[Body Read Failed: ${e.message}]`;
+                }
+            };
+
+            window.fetch = async function(...args) {
+                const [resource, config] = args;
+                
+                let url = typeof resource === 'string' ? resource : (resource instanceof Request ? resource.url : '');
+                if (!url && resource && resource.href) url = resource.href;
+
+                if (url && (url.includes('googleapis') || url.includes('generativelanguage'))) {
+                    const headers = getHeaders(resource, config);
+                    
+                    const urlObj = new URL(url);
+                    let keyFromUrl = urlObj.searchParams.get('key');
+                    let keyFromHeader = headers.get('x-goog-api-key');
+                    let activeKey = keyFromUrl || keyFromHeader;
+                    let keySource = keyFromUrl ? 'URL_PARAM' : (keyFromHeader ? 'HEADER' : 'NONE');
+                    
+                    let logTitle = `🚀 [API] ${urlObj.pathname.split('/').pop()}`;
+                    if (!activeKey) logTitle = `❌ [API MISSING KEY] ${urlObj.pathname.split('/').pop()}`;
+                    
+                    console.groupCollapsed(logTitle);
+                    console.log(`🔗 URL: ${url}`);
+                    
+                    if (activeKey) {
+                        const mask = activeKey.length > 8 
+                            ? `${activeKey.substring(0,4)}****${activeKey.substring(activeKey.length-4)}` 
+                            : '****';
+                        console.log(`🔑 Key Status: FOUND (${keySource})`);
+                        console.log(`🎫 Key Mask: ${mask}`);
+                    } else {
+                        console.error("❌ CRITICAL: No API Key found!");
+                    }
+
+                    // Log Body with robust decoding
+                    let bodyStr = config?.body;
+                    if (!bodyStr && resource instanceof Request) {
+                        bodyStr = await safeReadBody(resource);
+                    }
+                    
+                    if (bodyStr && typeof bodyStr === 'string') {
+                        try {
+                            if (bodyStr.startsWith('{') || bodyStr.startsWith('[')) {
+                                console.log("📦 Body (JSON):", JSON.parse(bodyStr));
+                            } else {
+                                console.log("📦 Body (Raw):", bodyStr);
+                            }
+                        } catch(e) {
+                            console.log("📦 Body (Decoded):", bodyStr);
+                        }
+                    }
+                    console.groupEnd();
+                }
+
+                try {
+                    const response = await originalFetch(...args);
+                    
+                    if (url && (url.includes('googleapis') || url.includes('generativelanguage'))) {
+                        if (!response.ok) {
+                            // Robust error reading
+                            const errorBodyStr = await safeReadBody(response);
+                            console.group(`🚨 [API Error ${response.status}]`);
+                            try {
+                                const json = JSON.parse(errorBodyStr);
+                                console.error("🔥 Error Response:", json);
+                            } catch (e) {
+                                console.log("🔥 Error Text:", errorBodyStr);
+                            }
+                            console.groupEnd();
+                        }
+                    }
+                    return response;
+                } catch (error) {
+                    // Check for AbortError specifically
+                    if (error.name === 'AbortError' || error.message.includes('aborted')) {
+                         console.warn(`🛑 [Request Aborted] ${url}`, error);
+                    } else {
+                         console.error(`💥 [Network Failure] ${url}`, error);
+                    }
+                    throw error;
+                }
+            };
+        })();
+    </script>
+
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Nunito:wght@400;700&display=swap" rel="stylesheet">
     <!-- Added ZCOOL KuaiLe for the cute font style requested in the reference -->
@@ -98,7 +228,6 @@
     "react/": "https://esm.sh/react@^19.2.3/",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
-    "recharts": "https://esm.sh/recharts@^3.6.0",
     "react-dom": "https://esm.sh/react-dom@^19.2.3"
   }
 }

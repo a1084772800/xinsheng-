@@ -7,6 +7,7 @@ export interface AppError {
     level: ErrorLevel;
     details?: any;
     duration?: number; // For toasts
+    openSettings?: boolean; // Trigger settings modal opening
 }
 
 type ErrorListener = (error: AppError) => void;
